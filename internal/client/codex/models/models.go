@@ -77,6 +77,7 @@ func buildCodexClientModels(models []map[string]any, providersForModel Providers
 			entry := cloneCodexClientModelMap(template)
 			applyCodexClientDisplayName(entry, model)
 			applyCodexClientMaxContextLengthOverride(entry, model)
+			applyCodexClientMaxInputTokens(entry, model)
 			applyCodexClientMaxTokens(entry, model)
 			applyCodexClientSearchToolSupport(entry, id, true, providersForModel)
 			sanitizeCodexClientReasoningMetadata(entry, clientVersion)
@@ -90,6 +91,7 @@ func buildCodexClientModels(models []map[string]any, providersForModel Providers
 
 		entry := cloneCodexClientModelMap(defaultTemplate)
 		applyCodexClientModelMetadata(entry, id, model, optimizeMultiAgentV2, clientVersion)
+		applyCodexClientMaxInputTokens(entry, model)
 		applyCodexClientMaxTokens(entry, model)
 		applyCodexClientSearchToolSupport(entry, id, false, providersForModel)
 		sanitizeCodexClientReasoningMetadata(entry, clientVersion)
@@ -208,6 +210,12 @@ func applyCodexClientMaxContextLengthOverride(entry map[string]any, model map[st
 	if maxContextLength := intModelValue(model, "max_context_length"); maxContextLength > 0 {
 		entry["context_window"] = maxContextLength
 		entry["max_context_window"] = maxContextLength
+	}
+}
+
+func applyCodexClientMaxInputTokens(entry map[string]any, model map[string]any) {
+	if maxInputTokens := intModelValue(model, "max_input_tokens"); maxInputTokens > 0 {
+		entry["max_input_tokens"] = maxInputTokens
 	}
 }
 

@@ -715,6 +715,12 @@ type OpenAICompatibilityModel struct {
 	// MaxContextLength overrides the context window advertised to Codex clients.
 	MaxContextLength int `yaml:"max-context-length,omitempty" json:"max-context-length,omitempty"`
 
+	// MaxInputTokens advertises the maximum accepted input token count.
+	MaxInputTokens int `yaml:"max-input-tokens,omitempty" json:"max-input-tokens,omitempty"`
+
+	// MaxOutputTokens advertises the maximum generated output token count.
+	MaxOutputTokens int `yaml:"max-output-tokens,omitempty" json:"max-output-tokens,omitempty"`
+
 	// ForceMapping rewrites upstream response model fields back to Alias.
 	ForceMapping bool `yaml:"force-mapping,omitempty" json:"force-mapping,omitempty"`
 
@@ -743,6 +749,8 @@ func (m OpenAICompatibilityModel) GetAlias() string { return m.Alias }
 
 func (m OpenAICompatibilityModel) GetDisplayName() string   { return m.DisplayName }
 func (m OpenAICompatibilityModel) GetMaxContextLength() int { return m.MaxContextLength }
+func (m OpenAICompatibilityModel) GetMaxInputTokens() int   { return m.MaxInputTokens }
+func (m OpenAICompatibilityModel) GetMaxOutputTokens() int  { return m.MaxOutputTokens }
 func (m OpenAICompatibilityModel) GetForceMapping() bool    { return m.ForceMapping }
 func (m OpenAICompatibilityModel) GetIsCompat() bool        { return m.IsCompat }
 

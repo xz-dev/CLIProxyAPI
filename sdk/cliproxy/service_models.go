@@ -731,6 +731,13 @@ func buildOpenAICompatibilityConfigModels(compat *config.OpenAICompatibility) []
 		if thinkingSupport == nil && !model.Image {
 			thinkingSupport = &registry.ThinkingSupport{Levels: []string{"low", "medium", "high"}}
 		}
+		if model.MaxInputTokens > 0 {
+			info.InputTokenLimit = model.MaxInputTokens
+		}
+		if model.MaxOutputTokens > 0 {
+			info.OutputTokenLimit = model.MaxOutputTokens
+			info.MaxCompletionTokens = model.MaxOutputTokens
+		}
 		info.Thinking = modelconfig.NormalizeThinkingSupport(thinkingSupport)
 		info.SupportedInputModalities = normalizeCompatConfigModalities(model.InputModalities)
 		info.SupportedOutputModalities = normalizeCompatConfigModalities(model.OutputModalities)

@@ -424,6 +424,23 @@ func TestCodexClientModelsResponseAppliesMaxContextLengthOverride(t *testing.T) 
 	}
 }
 
+func TestCodexClientModelsResponseMapsMaxInputTokens(t *testing.T) {
+	resp := BuildResponse([]map[string]any{
+		{"id": "gpt-5.5", "max_input_tokens": 1000000},
+		{"id": "custom-input-limit-model", "max_input_tokens": 128000},
+	}, nil, false)
+	models := resp["models"].([]map[string]any)
+	for _, model := range models {
+		slug := stringModelValue(model, "slug")
+		if slug == "gpt-5.5" && intModelValue(model, "max_input_tokens") != 1000000 {
+			t.Fatalf("template model=%v", model)
+		}
+		if slug == "custom-input-limit-model" && intModelValue(model, "max_input_tokens") != 128000 {
+			t.Fatalf("custom model=%v", model)
+		}
+	}
+}
+
 func TestCodexClientModelsResponseMapsMaxCompletionTokensToMaxTokens(t *testing.T) {
 	const wantTemplateLimit = 64000
 	const wantSynthesizedLimit = 32000
