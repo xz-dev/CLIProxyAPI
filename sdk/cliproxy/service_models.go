@@ -793,6 +793,13 @@ func buildOpenAICompatibilityConfigModels(compat *config.OpenAICompatibility) []
 		if len(model.InputModalities) > 0 {
 			info.ExplicitInputModalities = true
 		}
+		if model.MaxInputTokens > 0 {
+			info.InputTokenLimit = model.MaxInputTokens
+		}
+		if model.MaxOutputTokens > 0 {
+			info.OutputTokenLimit = model.MaxOutputTokens
+			info.MaxCompletionTokens = model.MaxOutputTokens
+		}
 		info.Thinking = modelconfig.NormalizeThinkingSupport(thinkingSupport)
 		info.SupportedInputModalities = normalizeCompatConfigModalities(model.InputModalities)
 		info.SupportedOutputModalities = normalizeCompatConfigModalities(model.OutputModalities)
