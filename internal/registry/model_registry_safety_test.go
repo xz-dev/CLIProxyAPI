@@ -156,6 +156,21 @@ func TestGetAvailableModelsIncludesMaxContextLengthOverride(t *testing.T) {
 	}
 }
 
+func TestGetAvailableModelsIncludesTokenLimits(t *testing.T) {
+	r := newTestModelRegistry()
+	r.RegisterClient("client-1", "openai", []*ModelInfo{{
+		ID:                  "model",
+		InputTokenLimit:     1000000,
+		OutputTokenLimit:    48576,
+		MaxCompletionTokens: 48576,
+	}})
+
+	model := r.GetAvailableModels("openai")[0]
+	if model["max_input_tokens"] != 1000000 || model["max_output_tokens"] != 48576 || model["max_completion_tokens"] != 48576 {
+		t.Fatalf("model=%v", model)
+	}
+}
+
 func TestLookupModelInfoReturnsCloneForStaticDefinitions(t *testing.T) {
 	first := LookupModelInfo("claude-sonnet-4-6")
 	if first == nil || first.Thinking == nil || len(first.Thinking.Levels) == 0 {

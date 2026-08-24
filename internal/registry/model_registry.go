@@ -1242,6 +1242,12 @@ func (r *ModelRegistry) convertModelToMap(model *ModelInfo, handlerType string) 
 		if model.MaxContextLength > 0 {
 			result["max_context_length"] = model.MaxContextLength
 		}
+		if model.InputTokenLimit > 0 {
+			result["max_input_tokens"] = model.InputTokenLimit
+		}
+		if model.OutputTokenLimit > 0 {
+			result["max_output_tokens"] = model.OutputTokenLimit
+		}
 		if model.MaxCompletionTokens > 0 {
 			result["max_completion_tokens"] = model.MaxCompletionTokens
 		}
