@@ -812,10 +812,39 @@ func buildGeminiConfigModels(entry *config.GeminiKey) []*ModelInfo {
 }
 
 func buildClaudeConfigModels(entry *config.ClaudeKey) []*ModelInfo {
-	if entry == nil {
+	if entry == nil || len(entry.Models) == 0 {
 		return nil
 	}
-	return buildConfigModels(entry.Models, "anthropic", "claude")
+	now := time.Now().Unix()
+	models := make([]*ModelInfo, 0, len(entry.Models))
+	seen := make(map[string]struct{}, len(entry.Models))
+	for i := range entry.Models {
+		model := entry.Models[i]
+		name := strings.TrimSpace(model.Name)
+		info := buildConfiguredModelInfo(model, "anthropic", "claude", now, name, true)
+		if info == nil {
+			continue
+		}
+		key := strings.ToLower(info.ID)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		if resolved := modelconfig.ResolveModelInfo(name, "claude", model.Thinking); resolved.Thinking != nil {
+			info.Thinking = resolved.Thinking
+		}
+		if model.MaxInputTokens > 0 {
+			info.InputTokenLimit = model.MaxInputTokens
+		}
+		if model.MaxOutputTokens > 0 {
+			info.OutputTokenLimit = model.MaxOutputTokens
+			info.MaxCompletionTokens = model.MaxOutputTokens
+		}
+		info.SupportedInputModalities = normalizeCompatConfigModalities(model.InputModalities)
+		info.SupportedOutputModalities = normalizeCompatConfigModalities(model.OutputModalities)
+		models = append(models, info)
+	}
+	return models
 }
 
 func buildXAIConfigModels(entry *config.XAIKey) []*ModelInfo {

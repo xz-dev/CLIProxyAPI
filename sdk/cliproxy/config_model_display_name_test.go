@@ -1,6 +1,7 @@
 package cliproxy
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
@@ -95,6 +96,24 @@ func TestBuildCodexConfigModelsSelectsDefaultsOrConfiguredModels(t *testing.T) {
 		if _, ok := defaultIDs[modelID]; !ok {
 			t.Errorf("missing default model %q", modelID)
 		}
+	}
+}
+
+func TestBuildClaudeConfigModelsPropagatesRichMetadata(t *testing.T) {
+	model := buildClaudeConfigModels(&config.ClaudeKey{Models: []config.ClaudeModel{{
+		Name:             "claude-upstream",
+		Alias:            "claude-alias",
+		MaxContextLength: 200000,
+		MaxInputTokens:   180000,
+		MaxOutputTokens:  64000,
+		InputModalities:  []string{"TEXT", "image", "image"},
+		OutputModalities: []string{"text"},
+	}}})[0]
+	if model.ContextLength != 200000 || model.MaxContextLength != 200000 || model.InputTokenLimit != 180000 || model.OutputTokenLimit != 64000 || model.MaxCompletionTokens != 64000 {
+		t.Fatalf("limits=%+v", model)
+	}
+	if strings.Join(model.SupportedInputModalities, ",") != "text,image" || strings.Join(model.SupportedOutputModalities, ",") != "text" {
+		t.Fatalf("modalities=%v/%v", model.SupportedInputModalities, model.SupportedOutputModalities)
 	}
 }
 

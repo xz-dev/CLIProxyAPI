@@ -63,6 +63,22 @@ func TestComputeOpenAICompatModelsHashIncludesTokenLimits(t *testing.T) {
 	}
 }
 
+func TestClaudeRichMetadataAffectsHash(t *testing.T) {
+	base := ComputeClaudeModelsHash([]config.ClaudeModel{{Name: "m"}})
+	variants := map[string]config.ClaudeModel{
+		"context":           {Name: "m", MaxContextLength: 200000},
+		"input limit":       {Name: "m", MaxInputTokens: 180000},
+		"output limit":      {Name: "m", MaxOutputTokens: 64000},
+		"input modalities":  {Name: "m", InputModalities: []string{"text", "image"}},
+		"output modalities": {Name: "m", OutputModalities: []string{"text"}},
+	}
+	for name, model := range variants {
+		if base == ComputeClaudeModelsHash([]config.ClaudeModel{model}) {
+			t.Fatalf("%s did not change Claude model hash", name)
+		}
+	}
+}
+
 func TestComputeOpenAICompatModelsHashPreservesRoutingOrderAndDuplicates(t *testing.T) {
 	a := []config.OpenAICompatibilityModel{
 		{Name: "gpt-4", Alias: "gpt4"},

@@ -429,6 +429,18 @@ type ClaudeModel struct {
 	// MaxContextLength overrides the context window advertised to Codex clients.
 	MaxContextLength int `yaml:"max-context-length,omitempty" json:"max-context-length,omitempty"`
 
+	// MaxInputTokens advertises the maximum accepted input token count.
+	MaxInputTokens int `yaml:"max-input-tokens,omitempty" json:"max-input-tokens,omitempty"`
+
+	// MaxOutputTokens advertises the maximum generated output token count.
+	MaxOutputTokens int `yaml:"max-output-tokens,omitempty" json:"max-output-tokens,omitempty"`
+
+	// InputModalities declares supported request modalities when explicitly configured.
+	InputModalities []string `yaml:"input-modalities,omitempty" json:"input-modalities,omitempty"`
+
+	// OutputModalities declares supported response modalities when explicitly configured.
+	OutputModalities []string `yaml:"output-modalities,omitempty" json:"output-modalities,omitempty"`
+
 	// ForceMapping rewrites upstream response model fields back to Alias.
 	ForceMapping bool `yaml:"force-mapping,omitempty" json:"force-mapping,omitempty"`
 
@@ -447,6 +459,8 @@ func (m ClaudeModel) GetAlias() string { return m.Alias }
 
 func (m ClaudeModel) GetDisplayName() string   { return m.DisplayName }
 func (m ClaudeModel) GetMaxContextLength() int { return m.MaxContextLength }
+func (m ClaudeModel) GetMaxInputTokens() int   { return m.MaxInputTokens }
+func (m ClaudeModel) GetMaxOutputTokens() int  { return m.MaxOutputTokens }
 func (m ClaudeModel) GetForceMapping() bool    { return m.ForceMapping }
 func (m ClaudeModel) GetIsCompat() bool        { return m.IsCompat }
 
