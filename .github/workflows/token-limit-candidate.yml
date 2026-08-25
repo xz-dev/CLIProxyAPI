@@ -1,0 +1,85 @@
+name: Build CPA token-limit candidate
+
+on:
+  push:
+    branches: [ci]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: cpa-token-limit-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SOURCE_REPOSITORY: xz-dev/CLIProxyAPI
+  SOURCE_SHA: 8417d15ecaa3d5b1fabdb225c9e3865844aa7a84
+  IMAGE: ghcr.io/xz-dev/cli-proxy-api
+  IMAGE_TAG: candidate-8417d15ecaa3
+
+jobs:
+  verify:
+    name: Test and build exact source
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact product source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_SHA }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test affected packages
+        run: >-
+          go test -count=1
+          ./internal/config
+          ./internal/api/handlers/management
+          ./internal/modelconfig
+          ./internal/watcher/diff
+          ./internal/registry
+          ./sdk/cliproxy
+          ./internal/client/codex/models
+          ./sdk/api/handlers/openai
+          ./internal/runtime/executor
+      - name: Build server
+        run: go build -o /tmp/cli-proxy-api ./cmd/server
+
+  docker:
+    name: Build and publish amd64 image
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact product source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_SHA }}
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push exact candidate
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            VERSION=${{ env.IMAGE_TAG }}
+            COMMIT=${{ env.SOURCE_SHA }}
+            BUILD_DATE=2026-08-25T00:00:00Z
+          tags: ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ env.SOURCE_REPOSITORY }}
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
+            org.opencontainers.image.version=${{ env.IMAGE_TAG }}
+      - name: Record immutable image
+        run: echo '${{ env.IMAGE }}@${{ steps.build.outputs.digest }}' >> "$GITHUB_STEP_SUMMARY"
