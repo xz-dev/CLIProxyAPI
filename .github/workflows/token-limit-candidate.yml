@@ -1,4 +1,4 @@
-name: Build CPA token-limit candidate
+name: Build CPA plugin-host status candidate
 
 on:
   push:
@@ -9,14 +9,14 @@ permissions:
   packages: write
 
 concurrency:
-  group: cpa-token-limit-candidate-${{ github.ref }}
+  group: cpa-plugin-host-status-candidate-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   SOURCE_REPOSITORY: xz-dev/CLIProxyAPI
-  SOURCE_SHA: 8417d15ecaa3d5b1fabdb225c9e3865844aa7a84
+  SOURCE_SHA: 4d055d993d00366aeb8aa5c67c49d3d116088e57
   IMAGE: ghcr.io/xz-dev/cli-proxy-api
-  IMAGE_TAG: candidate-8417d15ecaa3
+  IMAGE_TAG: candidate-plugin-host-status-4d055d993d00
 
 jobs:
   verify:
@@ -44,6 +44,10 @@ jobs:
           ./sdk/cliproxy
           ./internal/client/codex/models
           ./sdk/api/handlers/openai
+      - name: Test plugin host
+        run: go test -count=1 ./internal/pluginhost
+      - name: Cross-compile plugin host tests for Windows
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o /tmp/cliproxyapi-pluginhost-windows.test.exe ./internal/pluginhost
       - name: Test OpenAI-compatible executor
         run: go test -count=1 ./internal/runtime/executor -run OpenAICompat
       - name: Build server
@@ -76,7 +80,7 @@ jobs:
           build-args: |
             VERSION=${{ env.IMAGE_TAG }}
             COMMIT=${{ env.SOURCE_SHA }}
-            BUILD_DATE=2026-08-25T00:00:00Z
+            BUILD_DATE=2026-08-25T08:20:00Z
           tags: ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ env.SOURCE_REPOSITORY }}
