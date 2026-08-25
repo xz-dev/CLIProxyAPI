@@ -70,6 +70,10 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.DELETE("/proxy-url", s.mgmt.DeleteProxyURL)
 
 		mgmt.POST("/api-call", s.mgmt.APICall)
+		mgmt.GET("/model-channels", s.mgmt.GetModelChannels)
+		mgmt.POST("/model-channels/catalog", s.mgmt.FetchModelChannelCatalog)
+		mgmt.POST("/model-channels/reconcile-membership", s.mgmt.ReconcileModelChannelMembership)
+		mgmt.PATCH("/model-channels/metadata", s.mgmt.PatchModelChannelMetadata)
 
 		mgmt.GET("/quota-exceeded/switch-project", s.mgmt.GetSwitchProject)
 		mgmt.PUT("/quota-exceeded/switch-project", s.mgmt.PutSwitchProject)
