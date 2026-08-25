@@ -725,6 +725,16 @@ type modelCompatEntry interface {
 	GetIsCompat() bool
 }
 
+type modelTokenLimitEntry interface {
+	GetMaxInputTokens() int
+	GetMaxOutputTokens() int
+}
+
+type modelModalitiesEntry interface {
+	GetInputModalities() []string
+	GetOutputModalities() []string
+}
+
 func buildConfiguredModelInfo(model modelEntry, ownedBy, modelType string, created int64, fallbackDisplayName string, userDefined bool) *ModelInfo {
 	name := strings.TrimSpace(model.GetName())
 	alias := strings.TrimSpace(model.GetAlias())
@@ -857,6 +867,19 @@ func buildConfigModels[T modelEntry](models []T, ownedBy, modelType, metadataCha
 		if resolved := modelconfig.ResolveModelInfo(name, modelType, model.GetThinking()); resolved.Thinking != nil {
 			info.Thinking = resolved.Thinking
 		}
+		if limits, ok := any(model).(modelTokenLimitEntry); ok {
+			if maxInput := limits.GetMaxInputTokens(); maxInput > 0 {
+				info.InputTokenLimit = maxInput
+			}
+			if maxOutput := limits.GetMaxOutputTokens(); maxOutput > 0 {
+				info.OutputTokenLimit = maxOutput
+				info.MaxCompletionTokens = maxOutput
+			}
+		}
+		if modalities, ok := any(model).(modelModalitiesEntry); ok {
+			info.SupportedInputModalities = normalizeCompatConfigModalities(modalities.GetInputModalities())
+			info.SupportedOutputModalities = normalizeCompatConfigModalities(modalities.GetOutputModalities())
+		}
 		if staticInfo := registry.LookupStaticModelInfoByChannel(name, metadataChannel); staticInfo != nil && staticInfo.NativeCapabilities != nil {
 			info.NativeCapabilities = cloneModelInfoForCatalogRoute(staticInfo).NativeCapabilities
 		}
@@ -880,7 +903,7 @@ func buildGeminiConfigModels(entry *config.GeminiKey) []*ModelInfo {
 }
 
 func buildClaudeConfigModels(entry *config.ClaudeKey) []*ModelInfo {
-	if entry == nil {
+	if entry == nil || len(entry.Models) == 0 {
 		return nil
 	}
 	return buildConfigModels(entry.Models, "anthropic", "claude", "claude")

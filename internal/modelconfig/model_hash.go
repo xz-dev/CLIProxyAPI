@@ -50,7 +50,7 @@ func ComputeClaudeModelsHash(models []config.ClaudeModel) string {
 			if name == "" && alias == "" {
 				continue
 			}
-			out(strings.ToLower(name) + "|" + strings.ToLower(alias) + "|" + strings.TrimSpace(model.DisplayName) + "|" + fmt.Sprintf("force-mapping=%t", model.ForceMapping) + "|" + fmt.Sprintf("is-compat=%t", model.IsCompat) + thinkingHashSuffix(model.Thinking))
+			out(strings.ToLower(name) + "|" + strings.ToLower(alias) + "|" + strings.TrimSpace(model.DisplayName) + "|" + fmt.Sprintf("force-mapping=%t", model.ForceMapping) + "|" + fmt.Sprintf("is-compat=%t", model.IsCompat) + "|" + fmt.Sprintf("max-context=%d", model.MaxContextLength) + "|" + fmt.Sprintf("max-input=%d", model.MaxInputTokens) + "|" + fmt.Sprintf("max-output=%d", model.MaxOutputTokens) + "|input=" + strings.Join(normalizeModalities(model.InputModalities), ",") + "|output=" + strings.Join(normalizeModalities(model.OutputModalities), ",") + thinkingHashSuffix(model.Thinking))
 		}
 	})
 	return hashJoined(keys)
