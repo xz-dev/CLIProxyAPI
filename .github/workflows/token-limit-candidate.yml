@@ -1,4 +1,4 @@
-name: Build CPA plugin-host status candidate
+name: Build CPA model-channel candidate
 
 on:
   push:
@@ -9,14 +9,14 @@ permissions:
   packages: write
 
 concurrency:
-  group: cpa-plugin-host-status-candidate-${{ github.ref }}
+  group: cpa-model-channel-candidate-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   SOURCE_REPOSITORY: xz-dev/CLIProxyAPI
-  SOURCE_SHA: 4d055d993d00366aeb8aa5c67c49d3d116088e57
+  SOURCE_SHA: 07cb171df083d128120f9847debe512b8228807b
   IMAGE: ghcr.io/xz-dev/cli-proxy-api
-  IMAGE_TAG: candidate-plugin-host-status-4d055d993d00
+  IMAGE_TAG: candidate-model-channels-07cb171df083
 
 jobs:
   verify:
@@ -80,7 +80,7 @@ jobs:
           build-args: |
             VERSION=${{ env.IMAGE_TAG }}
             COMMIT=${{ env.SOURCE_SHA }}
-            BUILD_DATE=2026-08-25T08:20:00Z
+            BUILD_DATE=2026-08-25T12:31:00Z
           tags: ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ env.SOURCE_REPOSITORY }}
