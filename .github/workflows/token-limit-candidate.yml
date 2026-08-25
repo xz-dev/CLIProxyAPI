@@ -44,7 +44,8 @@ jobs:
           ./sdk/cliproxy
           ./internal/client/codex/models
           ./sdk/api/handlers/openai
-          ./internal/runtime/executor
+      - name: Test OpenAI-compatible executor
+        run: go test -count=1 ./internal/runtime/executor -run OpenAICompat
       - name: Build server
         run: go build -o /tmp/cli-proxy-api ./cmd/server
 
