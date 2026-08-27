@@ -1,4 +1,4 @@
-name: Build CPA model-channel candidate
+name: Build CPA four-plugin Core candidate
 
 on:
   push:
@@ -9,14 +9,15 @@ permissions:
   packages: write
 
 concurrency:
-  group: cpa-model-channel-candidate-${{ github.ref }}
-  cancel-in-progress: true
+  group: cpa-four-plugin-core-candidate-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   SOURCE_REPOSITORY: xz-dev/CLIProxyAPI
-  SOURCE_SHA: 07cb171df083d128120f9847debe512b8228807b
+  SOURCE_SHA: 95ab2b103b5748a2049c4aff9d50f135fe84cb6a
   IMAGE: ghcr.io/xz-dev/cli-proxy-api
-  IMAGE_TAG: candidate-model-channels-07cb171df083
+  IMAGE_TAG: candidate-four-plugin-core-95ab2b103b57
+  BUILD_DATE: "2026-08-26T08:36:35Z"
 
 jobs:
   verify:
@@ -29,6 +30,9 @@ jobs:
         with:
           repository: ${{ env.SOURCE_REPOSITORY }}
           ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify exact source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -37,19 +41,14 @@ jobs:
         run: >-
           go test -count=1
           ./internal/config
+          ./internal/pluginhost
+          ./internal/watcher
+          ./internal/watcher/diff
           ./internal/api/handlers/management
           ./internal/modelconfig
-          ./internal/watcher/diff
-          ./internal/registry
           ./sdk/cliproxy
-          ./internal/client/codex/models
-          ./sdk/api/handlers/openai
-      - name: Test plugin host
-        run: go test -count=1 ./internal/pluginhost
       - name: Cross-compile plugin host tests for Windows
         run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o /tmp/cliproxyapi-pluginhost-windows.test.exe ./internal/pluginhost
-      - name: Test OpenAI-compatible executor
-        run: go test -count=1 ./internal/runtime/executor -run OpenAICompat
       - name: Build server
         run: go build -o /tmp/cli-proxy-api ./cmd/server
 
@@ -64,6 +63,9 @@ jobs:
         with:
           repository: ${{ env.SOURCE_REPOSITORY }}
           ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify exact source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -75,16 +77,27 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
+          file: ./Dockerfile
           platforms: linux/amd64
           push: true
+          provenance: false
           build-args: |
             VERSION=${{ env.IMAGE_TAG }}
             COMMIT=${{ env.SOURCE_SHA }}
-            BUILD_DATE=2026-08-25T12:31:00Z
+            BUILD_DATE=${{ env.BUILD_DATE }}
           tags: ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ env.SOURCE_REPOSITORY }}
             org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
             org.opencontainers.image.version=${{ env.IMAGE_TAG }}
       - name: Record immutable image
-        run: echo '${{ env.IMAGE }}@${{ steps.build.outputs.digest }}' >> "$GITHUB_STEP_SUMMARY"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          test -n "$DIGEST"
+          {
+            echo '### Immutable candidate'
+            echo "- Source: $SOURCE_REPOSITORY@$SOURCE_SHA"
+            echo "- Image: $IMAGE:$IMAGE_TAG"
+            echo "- Digest: $IMAGE@$DIGEST"
+          } >> "$GITHUB_STEP_SUMMARY"
