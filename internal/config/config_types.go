@@ -374,10 +374,11 @@ type RoutingConfig struct {
 	SessionAffinitySubagents *bool `yaml:"session-affinity-subagents,omitempty" json:"session-affinity-subagents,omitempty"`
 }
 
-// OAuthModelAlias defines a model ID alias for a specific channel.
+// OAuthModelAlias defines a model ID alias or metadata override for a specific channel.
 // It maps the upstream model name (Name) to the client-visible alias (Alias).
 // When Fork is true, the alias is added as an additional model in listings while
-// keeping the original model ID available.
+// keeping the original model ID available. A same-name entry with a positive
+// MaxContextLength applies metadata without introducing an execution alias.
 type OAuthModelAlias struct {
 	Name  string `yaml:"name" json:"name"`
 	Alias string `yaml:"alias" json:"alias"`
@@ -385,6 +386,9 @@ type OAuthModelAlias struct {
 
 	// DisplayName is the optional human-readable name shown in model catalogs.
 	DisplayName string `yaml:"display-name,omitempty" json:"display-name,omitempty"`
+
+	// MaxContextLength overrides client catalog context metadata for this OAuth model.
+	MaxContextLength int `yaml:"max-context-length,omitempty" json:"max-context-length,omitempty"`
 
 	ForceMapping bool `yaml:"force-mapping,omitempty" json:"force-mapping,omitempty"`
 }

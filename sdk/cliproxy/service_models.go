@@ -1055,9 +1055,10 @@ func oauthModelAliasesForAuth(cfg *config.Config, channel string, attributes map
 
 func applyOAuthModelAliasEntries(aliases []config.OAuthModelAlias, models []*ModelInfo) []*ModelInfo {
 	type aliasEntry struct {
-		alias       string
-		displayName string
-		fork        bool
+		alias            string
+		displayName      string
+		fork             bool
+		maxContextLength int
 	}
 
 	forward := make(map[string][]aliasEntry, len(aliases))
@@ -1067,14 +1068,15 @@ func applyOAuthModelAliasEntries(aliases []config.OAuthModelAlias, models []*Mod
 		if name == "" || alias == "" {
 			continue
 		}
-		if strings.EqualFold(name, alias) {
+		if strings.EqualFold(name, alias) && aliases[i].MaxContextLength <= 0 {
 			continue
 		}
 		key := strings.ToLower(name)
 		forward[key] = append(forward[key], aliasEntry{
-			alias:       alias,
-			displayName: strings.TrimSpace(aliases[i].DisplayName),
-			fork:        aliases[i].Fork,
+			alias:            alias,
+			displayName:      strings.TrimSpace(aliases[i].DisplayName),
+			fork:             aliases[i].Fork,
+			maxContextLength: aliases[i].MaxContextLength,
 		})
 	}
 	if len(forward) == 0 {
@@ -1100,6 +1102,15 @@ func applyOAuthModelAliasEntries(aliases []config.OAuthModelAlias, models []*Mod
 			seen[key] = struct{}{}
 			out = append(out, model)
 			continue
+		}
+
+		for _, entry := range entries {
+			if strings.EqualFold(entry.alias, id) && entry.maxContextLength > 0 {
+				clone := *model
+				clone.MaxContextLength = entry.maxContextLength
+				model = &clone
+				break
+			}
 		}
 
 		keepOriginal := false

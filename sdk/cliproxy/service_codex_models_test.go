@@ -3,12 +3,15 @@ package cliproxy
 import (
 	"context"
 	"fmt"
+	"maps"
 	"testing"
 
+	internalcodexmodels "github.com/router-for-me/CLIProxyAPI/v7/internal/client/codex/models"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	internalregistry "github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	"gopkg.in/yaml.v3"
 )
 
 func TestRegisterModelsForAuthCodexConfigurationUpdate(t *testing.T) {
@@ -100,6 +103,106 @@ func TestRegisterModelsForAuthCodexConfigurationUpdate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRegisterModelsForAuthCodexOAuthContextProfile(t *testing.T) {
+	const authID = "codex-oauth-context-profile"
+	const modelID = "gpt-5.6-sol"
+
+	var cfg config.Config
+	if err := yaml.Unmarshal([]byte(`oauth-model-alias:
+  codex:
+    - name: gpt-5.6-sol
+      alias: gpt-5.6-sol
+      max-context-length: 372000
+`), &cfg); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+	cfg.SanitizeOAuthModelAlias()
+
+	modelRegistry := internalregistry.GetGlobalRegistry()
+	modelRegistry.UnregisterClient(authID)
+	t.Cleanup(func() { modelRegistry.UnregisterClient(authID) })
+
+	auth := &coreauth.Auth{
+		ID:       authID,
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+		Attributes: map[string]string{
+			"auth_kind": "oauth",
+			"plan_type": "pro",
+		},
+	}
+	service := &Service{cfg: &cfg}
+	service.registerModelsForAuth(context.Background(), auth)
+
+	models := modelRegistry.GetModelsForClient(authID)
+	wantIDs := codexModelIDSet(internalregistry.GetCodexProModels())
+	if gotIDs := codexModelIDSet(models); !maps.Equal(gotIDs, wantIDs) {
+		t.Fatalf("registered model IDs changed: got %#v, want %#v", gotIDs, wantIDs)
+	}
+
+	var target *internalregistry.ModelInfo
+	count := 0
+	for _, model := range models {
+		if model != nil && model.ID == modelID {
+			target = model
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("%s registration count = %d, want 1", modelID, count)
+	}
+	if auth.Provider != "codex" || auth.Attributes["plan_type"] != "pro" {
+		t.Fatalf("auth ownership changed: provider=%q plan=%q", auth.Provider, auth.Attributes["plan_type"])
+	}
+	if target.ContextLength != 921000 {
+		t.Fatalf("static ContextLength = %d, want 921000", target.ContextLength)
+	}
+	if target.MaxContextLength != 372000 {
+		t.Fatalf("MaxContextLength = %d, want 372000", target.MaxContextLength)
+	}
+	if target.MaxCompletionTokens != 128000 {
+		t.Fatalf("MaxCompletionTokens = %d, want 128000", target.MaxCompletionTokens)
+	}
+
+	var catalogModel map[string]any
+	for _, model := range modelRegistry.GetAvailableModels("openai") {
+		if model["id"] == modelID {
+			catalogModel = model
+			break
+		}
+	}
+	if catalogModel == nil {
+		t.Fatalf("openai registry catalog is missing %s", modelID)
+	}
+	if got := catalogModel["context_length"]; got != 921000 {
+		t.Fatalf("registry context_length = %#v, want 921000", got)
+	}
+	if got := catalogModel["max_context_length"]; got != 372000 {
+		t.Fatalf("registry max_context_length = %#v, want 372000", got)
+	}
+
+	response := internalcodexmodels.BuildResponse([]map[string]any{catalogModel}, modelRegistry.GetModelProviders, false)
+	detailed := response["models"].([]map[string]any)
+	if len(detailed) != 1 {
+		t.Fatalf("detailed catalog models = %d, want 1", len(detailed))
+	}
+	if got := detailed[0]["context_window"]; got != 372000 {
+		t.Fatalf("context_window = %#v, want 372000", got)
+	}
+	if got := detailed[0]["max_context_window"]; got != 372000 {
+		t.Fatalf("max_context_window = %#v, want 372000", got)
+	}
+	if got := detailed[0]["max_tokens"]; got != 128000 {
+		t.Fatalf("max_tokens = %#v, want 128000", got)
+	}
+	if _, exists := detailed[0]["max_input_tokens"]; exists {
+		t.Fatal("detailed catalog unexpectedly advertises max_input_tokens")
+	}
+	if got := detailed[0]["auto_compact_token_limit"]; got != nil {
+		t.Fatalf("auto_compact_token_limit = %#v, want nil", got)
 	}
 }
 
