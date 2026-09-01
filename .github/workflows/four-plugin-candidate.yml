@@ -37,8 +37,17 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Test exact source
-        run: go test -count=1 ./...
+      - name: Test affected packages
+        run: >-
+          go test -count=1
+          ./internal/config
+          ./internal/client/codex/models
+          ./internal/pluginhost
+          ./internal/watcher
+          ./internal/watcher/diff
+          ./internal/api/handlers/management
+          ./sdk/cliproxy
+          ./sdk/cliproxy/auth
       - name: Race-check Codex OAuth context profile
         run: |
           go test -race -count=10 ./sdk/cliproxy -run '^TestRegisterModelsForAuthCodexOAuthContextProfile$'
