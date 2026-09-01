@@ -58,9 +58,10 @@ func (cfg *Config) SanitizeClaudeHeaderDefaults() {
 	cfg.ClaudeHeaderDefaults.Timezone = strings.TrimSpace(cfg.ClaudeHeaderDefaults.Timezone)
 }
 
-// SanitizeOAuthModelAlias normalizes and deduplicates global OAuth model name aliases.
+// SanitizeOAuthModelAlias normalizes and deduplicates global OAuth model aliases and metadata.
 // It trims whitespace, normalizes channel keys to lower-case, drops empty entries,
 // allows multiple aliases per upstream name, and ensures aliases are unique within each channel.
+// Same-name entries are retained only when they carry a positive metadata override.
 func (cfg *Config) SanitizeOAuthModelAlias() {
 	if cfg == nil || len(cfg.OAuthModelAlias) == 0 {
 		return
@@ -79,7 +80,11 @@ func (cfg *Config) SanitizeOAuthModelAlias() {
 			if name == "" || alias == "" {
 				continue
 			}
-			if strings.EqualFold(name, alias) {
+			maxContextLength := entry.MaxContextLength
+			if maxContextLength < 0 {
+				maxContextLength = 0
+			}
+			if strings.EqualFold(name, alias) && maxContextLength == 0 {
 				continue
 			}
 			aliasKey := strings.ToLower(alias)
@@ -88,11 +93,12 @@ func (cfg *Config) SanitizeOAuthModelAlias() {
 			}
 			seenAlias[aliasKey] = struct{}{}
 			clean = append(clean, OAuthModelAlias{
-				Name:         name,
-				Alias:        alias,
-				Fork:         entry.Fork,
-				DisplayName:  strings.TrimSpace(entry.DisplayName),
-				ForceMapping: entry.ForceMapping,
+				Name:             name,
+				Alias:            alias,
+				Fork:             entry.Fork,
+				DisplayName:      strings.TrimSpace(entry.DisplayName),
+				MaxContextLength: maxContextLength,
+				ForceMapping:     entry.ForceMapping,
 			})
 		}
 		if len(clean) > 0 {

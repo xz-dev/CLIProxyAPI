@@ -285,7 +285,7 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 	if ctx.Err() != nil {
 		return
 	}
-	models = applyOAuthModelAliasForAuth(s.cfg, provider, authKind, a.Attributes, models)
+	models = applyOAuthModelAliasForAuth(s.cfg, provider, authKind, a, models)
 	if ctx.Err() != nil {
 		return
 	}
@@ -1005,7 +1005,7 @@ func applyOAuthModelAlias(cfg *config.Config, provider, authKind string, models 
 	return applyOAuthModelAliasForAuth(cfg, provider, authKind, nil, models)
 }
 
-func applyOAuthModelAliasForAuth(cfg *config.Config, provider, authKind string, attributes map[string]string, models []*ModelInfo) []*ModelInfo {
+func applyOAuthModelAliasForAuth(cfg *config.Config, provider, authKind string, a *coreauth.Auth, models []*ModelInfo) []*ModelInfo {
 	if len(models) == 0 {
 		return models
 	}
@@ -1013,11 +1013,28 @@ func applyOAuthModelAliasForAuth(cfg *config.Config, provider, authKind string, 
 	if channel == "" {
 		return models
 	}
+	var attributes map[string]string
+	if a != nil {
+		attributes = a.Attributes
+	}
 	aliases := oauthModelAliasesForAuth(cfg, channel, attributes)
 	if len(aliases) == 0 {
 		return models
 	}
-	return applyOAuthModelAliasEntries(aliases, models)
+	return applyOAuthModelAliasEntries(aliases, models, eligibleForCodexOAuthModelMetadata(a, provider, authKind))
+}
+
+func eligibleForCodexOAuthModelMetadata(a *coreauth.Auth, provider, authKind string) bool {
+	if a == nil || a.Disabled || a.Status != coreauth.StatusActive {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(provider), constant.Codex) || !strings.EqualFold(strings.TrimSpace(authKind), coreauth.AuthKindOAuth) {
+		return false
+	}
+	if a.AuthSourceKind() != coreauth.AuthSourceFile {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(a.Attributes["plan_type"]), "pro")
 }
 
 func oauthModelAliasesForAuth(cfg *config.Config, channel string, attributes map[string]string) []config.OAuthModelAlias {
@@ -1053,11 +1070,12 @@ func oauthModelAliasesForAuth(cfg *config.Config, channel string, attributes map
 	return out
 }
 
-func applyOAuthModelAliasEntries(aliases []config.OAuthModelAlias, models []*ModelInfo) []*ModelInfo {
+func applyOAuthModelAliasEntries(aliases []config.OAuthModelAlias, models []*ModelInfo, applyModelMetadata bool) []*ModelInfo {
 	type aliasEntry struct {
-		alias       string
-		displayName string
-		fork        bool
+		alias            string
+		displayName      string
+		fork             bool
+		maxContextLength int
 	}
 
 	forward := make(map[string][]aliasEntry, len(aliases))
@@ -1067,14 +1085,19 @@ func applyOAuthModelAliasEntries(aliases []config.OAuthModelAlias, models []*Mod
 		if name == "" || alias == "" {
 			continue
 		}
-		if strings.EqualFold(name, alias) {
+		maxContextLength := 0
+		if applyModelMetadata {
+			maxContextLength = aliases[i].MaxContextLength
+		}
+		if strings.EqualFold(name, alias) && maxContextLength <= 0 {
 			continue
 		}
 		key := strings.ToLower(name)
 		forward[key] = append(forward[key], aliasEntry{
-			alias:       alias,
-			displayName: strings.TrimSpace(aliases[i].DisplayName),
-			fork:        aliases[i].Fork,
+			alias:            alias,
+			displayName:      strings.TrimSpace(aliases[i].DisplayName),
+			fork:             aliases[i].Fork,
+			maxContextLength: maxContextLength,
 		})
 	}
 	if len(forward) == 0 {
@@ -1100,6 +1123,15 @@ func applyOAuthModelAliasEntries(aliases []config.OAuthModelAlias, models []*Mod
 			seen[key] = struct{}{}
 			out = append(out, model)
 			continue
+		}
+
+		for _, entry := range entries {
+			if strings.EqualFold(entry.alias, id) && entry.maxContextLength > 0 {
+				clone := *model
+				clone.MaxContextLength = entry.maxContextLength
+				model = &clone
+				break
+			}
 		}
 
 		keepOriginal := false

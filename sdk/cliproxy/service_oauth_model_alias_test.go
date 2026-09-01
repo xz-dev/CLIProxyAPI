@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 )
 
@@ -204,7 +205,7 @@ func TestApplyOAuthModelAlias_PerAuthAlias(t *testing.T) {
 		"model_aliases": `[{"name":"gpt-5.3-codex-spark","alias":"gpt-5.5","display-name":"Configured GPT Five"}]`,
 	}
 
-	out := applyOAuthModelAliasForAuth(nil, "codex", "oauth", attributes, models)
+	out := applyOAuthModelAliasForAuth(nil, "codex", "oauth", &coreauth.Auth{Attributes: attributes}, models)
 	if len(out) != 1 {
 		t.Fatalf("expected 1 model, got %d", len(out))
 	}

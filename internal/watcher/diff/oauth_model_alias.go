@@ -86,6 +86,9 @@ func summarizeOAuthModelAliasList(list []config.OAuthModelAlias) OAuthModelAlias
 		if displayName := strings.TrimSpace(alias.DisplayName); displayName != "" {
 			key += "|display-name=" + displayName
 		}
+		if alias.MaxContextLength > 0 {
+			key += fmt.Sprintf("|max-context=%d", alias.MaxContextLength)
+		}
 		if alias.ForceMapping {
 			key += "|force-mapping"
 		}
