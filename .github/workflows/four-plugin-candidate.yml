@@ -14,10 +14,10 @@ concurrency:
 
 env:
   SOURCE_REPOSITORY: xz-dev/CLIProxyAPI
-  SOURCE_SHA: d3e7c5197c65befb5c0a8bae2390d0a51229abe9
+  SOURCE_SHA: 4ef44d3746cb12bdb05406784c94b8f0bf53ca5b
   IMAGE: ghcr.io/xz-dev/cli-proxy-api
-  IMAGE_TAG: candidate-codex-oauth-context-d3e7c5197c65
-  BUILD_DATE: "2026-09-01T00:00:46Z"
+  IMAGE_TAG: candidate-codex-oauth-context-4ef44d3746cb
+  BUILD_DATE: "2026-09-01T03:35:21Z"
 
 jobs:
   verify:
@@ -50,7 +50,7 @@ jobs:
           ./sdk/cliproxy/auth
       - name: Race-check Codex OAuth context profile
         run: |
-          go test -race -count=10 ./sdk/cliproxy -run '^TestRegisterModelsForAuthCodexOAuthContextProfile$'
+          go test -race -count=10 ./sdk/cliproxy -run '^(TestRegisterModelsForAuthCodexOAuthContextProfile|TestRegisterModelsForAuthCodexOAuthContextProfileEligibility|TestRegisterModelsForAuthCodexOAuthContextProfileDisabled|TestRegisterModelsForAuthOAuthContextProfileSkipsUnrelatedProvider|TestEligibleForCodexOAuthModelMetadataRejectsDisabledAndUnrelatedProvider)$'
           go test -race -count=10 ./internal/client/codex/models -run '^TestRefreshedCodexClientTemplateCannotDisplaceRegistryContextProfile$'
           go test -race -count=10 ./sdk/cliproxy/auth -run '^TestApplyOAuthModelAlias_MetadataOnlySameNameDoesNotAlterRouting$'
       - name: Cross-compile plugin host tests for Windows
