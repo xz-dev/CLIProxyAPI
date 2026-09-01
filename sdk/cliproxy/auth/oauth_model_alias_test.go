@@ -6,6 +6,21 @@ import (
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 )
 
+func TestApplyOAuthModelAlias_MetadataOnlySameNameDoesNotAlterRouting(t *testing.T) {
+	t.Parallel()
+
+	manager := NewManager(nil, nil, nil)
+	manager.SetOAuthModelAlias(map[string][]internalconfig.OAuthModelAlias{
+		"codex": {{Name: "gpt-5.6-sol", Alias: "gpt-5.6-sol", MaxContextLength: 372000}},
+	})
+	auth := &Auth{ID: "codex-pro", Provider: "codex", Attributes: map[string]string{"auth_kind": "oauth", "plan_type": "pro"}}
+
+	result := manager.applyOAuthModelAliasWithResult(auth, "gpt-5.6-sol")
+	if result.UpstreamModel != "gpt-5.6-sol" || result.ForceMapping || result.OriginalAlias != "" {
+		t.Fatalf("metadata-only alias changed routing: %+v", result)
+	}
+}
+
 func TestResolveOAuthUpstreamModel_SuffixPreservation(t *testing.T) {
 	t.Parallel()
 

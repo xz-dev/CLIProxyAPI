@@ -175,6 +175,20 @@ func TestRegisterModelsRegistersProviderModelsAndClientID(t *testing.T) {
 	}
 }
 
+func TestPluginOAuthModelAliasesSkipsMetadataOnlyEntries(t *testing.T) {
+	aliases := pluginOAuthModelAliases(map[string][]config.OAuthModelAlias{
+		"codex": {
+			{Name: "gpt-5.6-sol", Alias: "gpt-5.6-sol", MaxContextLength: 372000},
+			{Name: "gpt-5", Alias: "g5"},
+		},
+	})
+
+	got := aliases["codex"]
+	if len(got) != 1 || got[0].Name != "gpt-5" || got[0].Alias != "g5" {
+		t.Fatalf("plugin aliases = %#v, want only execution alias", got)
+	}
+}
+
 func TestRegisterModelsUsesModelProviderStaticModels(t *testing.T) {
 	modelRegistry := newFakeModelRegistry()
 	called := false

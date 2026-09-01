@@ -53,7 +53,7 @@ func pluginOAuthModelAliases(in map[string][]config.OAuthModelAlias) map[string]
 		for _, alias := range aliases {
 			name := strings.TrimSpace(alias.Name)
 			value := strings.TrimSpace(alias.Alias)
-			if name == "" || value == "" {
+			if name == "" || value == "" || strings.EqualFold(name, value) {
 				continue
 			}
 			out[key] = append(out[key], pluginapi.ModelAlias{Name: name, Alias: value})

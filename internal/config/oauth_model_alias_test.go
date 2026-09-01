@@ -1,6 +1,47 @@
 package config
 
-import "testing"
+import (
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
+
+func TestSanitizeOAuthModelAlias_PreservesSameNameContextProfile(t *testing.T) {
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(`oauth-model-alias:
+  codex:
+    - name: gpt-5.6-sol
+      alias: gpt-5.6-sol
+      max-context-length: 372000
+`), &cfg); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+
+	cfg.SanitizeOAuthModelAlias()
+
+	aliases := cfg.OAuthModelAlias["codex"]
+	if len(aliases) != 1 {
+		t.Fatalf("same-name context profile aliases = %d, want 1", len(aliases))
+	}
+	if got := aliases[0].MaxContextLength; got != 372000 {
+		t.Fatalf("max-context-length = %d, want 372000", got)
+	}
+}
+
+func TestSanitizeOAuthModelAlias_DropsSameNameWithoutPositiveContextProfile(t *testing.T) {
+	cfg := Config{OAuthModelAlias: map[string][]OAuthModelAlias{
+		"codex": {
+			{Name: "gpt-5.5", Alias: "gpt-5.5"},
+			{Name: "gpt-5.6-sol", Alias: "gpt-5.6-sol", MaxContextLength: -1},
+		},
+	}}
+
+	cfg.SanitizeOAuthModelAlias()
+
+	if aliases := cfg.OAuthModelAlias["codex"]; len(aliases) != 0 {
+		t.Fatalf("non-positive same-name aliases = %#v, want none", aliases)
+	}
+}
 
 func TestSanitizeOAuthModelAlias_PreservesOptionalFields(t *testing.T) {
 	cfg := &Config{

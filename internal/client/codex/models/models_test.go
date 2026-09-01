@@ -384,6 +384,58 @@ func TestApplyCodexClientModelMetadataPreservesMultiAgentVersionWhenDisabled(t *
 	}
 }
 
+func TestRefreshedCodexClientTemplateCannotDisplaceRegistryContextProfile(t *testing.T) {
+	codexClientModelTemplatesMu.Lock()
+	previousLoaded := codexClientModelTemplatesLoaded
+	previousRevision := codexClientModelTemplatesRevision
+	previousTemplates := codexClientModelTemplates
+	previousDefault := codexClientDefaultTemplate
+	previousErr := codexClientModelTemplatesErr
+	codexClientModelTemplatesLoaded = false
+	codexClientModelTemplatesMu.Unlock()
+	t.Cleanup(func() {
+		codexClientModelTemplatesMu.Lock()
+		codexClientModelTemplatesLoaded = previousLoaded
+		codexClientModelTemplatesRevision = previousRevision
+		codexClientModelTemplates = previousTemplates
+		codexClientDefaultTemplate = previousDefault
+		codexClientModelTemplatesErr = previousErr
+		codexClientModelTemplatesMu.Unlock()
+	})
+
+	refreshed := []byte(`{"models":[{"slug":"gpt-5.5"},{"slug":"gpt-5.6-sol","context_window":111000,"max_context_window":999000,"max_tokens":64000,"auto_compact_token_limit":null}]}`)
+	if _, _, err := loadCodexClientModelTemplatesSnapshot(refreshed, registry.GetCodexClientModelsRevision()); err != nil {
+		t.Fatalf("load refreshed snapshot: %v", err)
+	}
+	response := BuildResponse([]map[string]any{{
+		"id":                    "gpt-5.6-sol",
+		"context_length":        921000,
+		"max_context_length":    372000,
+		"max_completion_tokens": 128000,
+	}}, nil, false)
+	models := response["models"].([]map[string]any)
+	if len(models) != 1 {
+		t.Fatalf("catalog models = %d, want 1", len(models))
+	}
+	entry := models[0]
+
+	if got := intModelValue(entry, "context_window"); got != 372000 {
+		t.Fatalf("context_window = %d, want 372000", got)
+	}
+	if got := intModelValue(entry, "max_context_window"); got != 372000 {
+		t.Fatalf("max_context_window = %d, want 372000", got)
+	}
+	if got := intModelValue(entry, "max_tokens"); got != 128000 {
+		t.Fatalf("max_tokens = %d, want 128000", got)
+	}
+	if _, exists := entry["max_input_tokens"]; exists {
+		t.Fatalf("unexpected max_input_tokens: %#v", entry["max_input_tokens"])
+	}
+	if got := entry["auto_compact_token_limit"]; got != nil {
+		t.Fatalf("auto_compact_token_limit = %#v, want nil", got)
+	}
+}
+
 func TestCodexClientModelsResponseAppliesMaxContextLengthOverride(t *testing.T) {
 	const wantOverride = 1048576
 	const wantDefault = 272000
