@@ -1,4 +1,4 @@
-name: Build CPA Codex OAuth context candidate
+name: Build CPA v7.2.146 downstream candidate
 
 on:
   push:
@@ -9,15 +9,15 @@ permissions:
   packages: write
 
 concurrency:
-  group: cpa-codex-oauth-context-candidate-${{ github.ref }}
+  group: cpa-v7.2.146-downstream-candidate-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   SOURCE_REPOSITORY: xz-dev/CLIProxyAPI
-  SOURCE_SHA: 4ef44d3746cb12bdb05406784c94b8f0bf53ca5b
+  SOURCE_SHA: 0f10a3635c39984d9eae139a4d7b3759f51ec6d0
   IMAGE: ghcr.io/xz-dev/cli-proxy-api
-  IMAGE_TAG: candidate-codex-oauth-context-4ef44d3746cb
-  BUILD_DATE: "2026-09-01T03:35:21Z"
+  IMAGE_TAG: v7.2.146-xz.1
+  BUILD_DATE: "2026-09-01T07:31:33Z"
 
 jobs:
   verify:
@@ -46,6 +46,7 @@ jobs:
           ./internal/watcher
           ./internal/watcher/diff
           ./internal/api/handlers/management
+          ./internal/runtime/executor
           ./sdk/cliproxy
           ./sdk/cliproxy/auth
       - name: Race-check Codex OAuth context profile
