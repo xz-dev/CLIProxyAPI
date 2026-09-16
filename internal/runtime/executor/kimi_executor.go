@@ -709,7 +709,7 @@ func normalizeKimiToolMessageLinks(body []byte) ([]byte, error) {
 	}
 
 	for msgIndex, msg := range msgs {
-		if shouldDropKimiAssistantMessage(msg) {
+		if shouldDropKimiAssistantMessage(msg) || shouldDropKimiEmptyUserMessage(msg) {
 			droppedMessages[msgIndex] = true
 			dropped++
 			continue
@@ -769,11 +769,17 @@ func normalizeKimiToolMessageLinks(body []byte) ([]byte, error) {
 			if toolCallID != "" {
 				removePending(toolCallID)
 			}
+			if isKimiAssistantContentEmpty(msg.Get("content")) {
+				// Kimi 上游拒绝空 text content；tool 消息不能整体丢弃（会断开 tool_call 配对），
+				// 用占位文本代替空输出。
+				patches = append(patches, messagePatch{index: msgIndex, path: "content", value: "(no output)", errorContext: "failed to fill empty tool message content"})
+				patched++
+			}
 		}
 	}
 
 	if dropped > 0 {
-		log.WithField("dropped_assistant_messages", dropped).Debug("kimi executor: dropped empty assistant messages")
+		log.WithField("dropped_empty_messages", dropped).Debug("kimi executor: dropped empty messages")
 	}
 	if dropped == 0 && len(patches) == 0 {
 		if ambiguous > 0 {
@@ -816,7 +822,7 @@ func normalizeKimiToolMessageLinks(body []byte) ([]byte, error) {
 		updated, errSet := sjson.SetRawBytes(body, "messages", helps.JoinRawJSONStrings(messageItems))
 		if errSet != nil {
 			if dropped > 0 {
-				return body, fmt.Errorf("kimi executor: failed to drop empty assistant messages: %w", errSet)
+				return body, fmt.Errorf("kimi executor: failed to drop empty messages: %w", errSet)
 			}
 			return body, fmt.Errorf("kimi executor: %s: %w", patches[0].errorContext, errSet)
 		}
@@ -885,6 +891,17 @@ func isKimiAssistantContentEmpty(content gjson.Result) bool {
 		}
 	}
 	return true
+}
+
+// shouldDropKimiEmptyUserMessage drops user messages whose content carries no text
+// and no non-text parts (e.g. images). Kimi upstream rejects empty text content with a
+// 400 ("message at position N with role 'user' must not be empty"), while an empty user
+// message conveys no information to the model.
+func shouldDropKimiEmptyUserMessage(msg gjson.Result) bool {
+	if strings.TrimSpace(msg.Get("role").String()) != "user" {
+		return false
+	}
+	return isKimiAssistantContentEmpty(msg.Get("content"))
 }
 
 func isKimiAssistantContentPartEmpty(part gjson.Result) bool {

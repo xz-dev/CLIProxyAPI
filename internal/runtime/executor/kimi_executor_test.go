@@ -1549,3 +1549,59 @@ func TestKimiExecutor_KimiAI_Refresh(t *testing.T) {
 		}
 	}
 }
+func TestNormalizeKimiToolMessageLinks_DropsEmptyUserMessage(t *testing.T) {
+	body := []byte(`{
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":"hello"}]},
+			{"role":"user","content":[{"type":"text","text":""}]},
+			{"role":"user","content":""},
+			{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]},
+			{"role":"assistant","content":"ok"}
+		]
+	}`)
+
+	out, err := normalizeKimiToolMessageLinks(body)
+	if err != nil {
+		t.Fatalf("normalizeKimiToolMessageLinks() error = %v", err)
+	}
+
+	msgs := gjson.GetBytes(out, "messages").Array()
+	if len(msgs) != 3 {
+		t.Fatalf("len(messages) = %d, want 3; out=%s", len(msgs), out)
+	}
+	if got := msgs[0].Get("content.0.text").String(); got != "hello" {
+		t.Fatalf("messages.0 text = %q, want %q", got, "hello")
+	}
+	if got := msgs[1].Get("content.0.type").String(); got != "image_url" {
+		t.Fatalf("messages.1 content.0.type = %q, want %q", got, "image_url")
+	}
+	if got := msgs[2].Get("role").String(); got != "assistant" {
+		t.Fatalf("messages.2.role = %q, want %q", got, "assistant")
+	}
+}
+
+func TestNormalizeKimiToolMessageLinks_FillsEmptyToolMessageContent(t *testing.T) {
+	body := []byte(`{
+		"messages":[
+			{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"run","arguments":"{}"}}],"reasoning_content":"r1"},
+			{"role":"tool","tool_call_id":"call_1","content":""},
+			{"role":"tool","tool_call_id":"call_1","content":[{"type":"text","text":""}]}
+		]
+	}`)
+
+	out, err := normalizeKimiToolMessageLinks(body)
+	if err != nil {
+		t.Fatalf("normalizeKimiToolMessageLinks() error = %v", err)
+	}
+
+	msgs := gjson.GetBytes(out, "messages").Array()
+	if len(msgs) != 3 {
+		t.Fatalf("len(messages) = %d, want 3 (tool messages must be kept); out=%s", len(msgs), out)
+	}
+	for i := 1; i <= 2; i++ {
+		got := msgs[i].Get("content").String()
+		if got != "(no output)" {
+			t.Fatalf("messages.%d.content = %q, want %q", i, got, "(no output)")
+		}
+	}
+}
