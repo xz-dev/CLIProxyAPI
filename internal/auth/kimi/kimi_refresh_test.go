@@ -2,6 +2,7 @@ package kimi
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -21,6 +23,100 @@ func (f kimiRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) 
 
 func resetKimiRefreshGroupForTest() {
 	kimiRefreshGroup = singleflight.Group{}
+}
+
+func TestRefreshTokenClassifiesInvalidGrantAsRejectedCredential(t *testing.T) {
+	resetKimiRefreshGroupForTest()
+	t.Cleanup(resetKimiRefreshGroupForTest)
+
+	transport := kimiRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"invalid_grant","error_description":"refresh token is invalid"}`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})
+	client := &DeviceFlowClient{httpClient: &http.Client{Transport: transport}}
+
+	_, errRefresh := client.RefreshToken(context.Background(), "rejected-refresh-token")
+	if !cliproxyauth.IsRefreshCredentialRejected(errRefresh) {
+		t.Fatalf("RefreshToken() error = %v, want rejected refresh credential", errRefresh)
+	}
+	if strings.Contains(errRefresh.Error(), "refresh token is invalid") {
+		t.Fatalf("RefreshToken() error exposed provider response: %v", errRefresh)
+	}
+	var authErr *cliproxyauth.Error
+	if !errors.As(errRefresh, &authErr) || authErr == nil {
+		t.Fatalf("RefreshToken() error = %T, want *auth.Error", errRefresh)
+	}
+	if authErr.Code != cliproxyauth.ErrorCodeRefreshCredentialRejected || authErr.HTTPStatus != http.StatusBadRequest || authErr.Retryable {
+		t.Fatalf("RefreshToken() error = %+v, want non-retryable HTTP 400 rejection", authErr)
+	}
+}
+
+func TestRefreshTokenLeavesOrdinaryBadRequestRetryable(t *testing.T) {
+	resetKimiRefreshGroupForTest()
+	t.Cleanup(resetKimiRefreshGroupForTest)
+
+	transport := kimiRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"temporarily_unavailable"}`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})
+	client := &DeviceFlowClient{httpClient: &http.Client{Transport: transport}}
+
+	_, errRefresh := client.RefreshToken(context.Background(), "retryable-refresh-token")
+	if errRefresh == nil {
+		t.Fatal("RefreshToken() error = nil, want ordinary bad request")
+	}
+	if cliproxyauth.IsRefreshCredentialRejected(errRefresh) {
+		t.Fatalf("RefreshToken() error = %v, want retryable classification", errRefresh)
+	}
+}
+
+func TestRefreshTokenLeavesNetworkErrorRetryable(t *testing.T) {
+	resetKimiRefreshGroupForTest()
+	t.Cleanup(resetKimiRefreshGroupForTest)
+
+	transport := kimiRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, io.ErrUnexpectedEOF
+	})
+	client := &DeviceFlowClient{httpClient: &http.Client{Transport: transport}}
+
+	_, errRefresh := client.RefreshToken(context.Background(), "retryable-refresh-token")
+	if errRefresh == nil {
+		t.Fatal("RefreshToken() error = nil, want network error")
+	}
+	if cliproxyauth.IsRefreshCredentialRejected(errRefresh) {
+		t.Fatalf("RefreshToken() error = %v, want retryable classification", errRefresh)
+	}
+}
+
+func TestRefreshTokenDoesNotClassifySuccessfulInvalidGrantField(t *testing.T) {
+	resetKimiRefreshGroupForTest()
+	t.Cleanup(resetKimiRefreshGroupForTest)
+
+	transport := kimiRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600,"error":"invalid_grant"}`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})
+	client := &DeviceFlowClient{httpClient: &http.Client{Transport: transport}}
+
+	tokenData, errRefresh := client.RefreshToken(context.Background(), "refresh-token")
+	if errRefresh != nil {
+		t.Fatalf("RefreshToken() error = %v, want success", errRefresh)
+	}
+	if tokenData == nil || tokenData.AccessToken != "new-access" {
+		t.Fatalf("RefreshToken() token data = %#v, want new access token", tokenData)
+	}
 }
 
 func TestRefreshToken_DeduplicatesConcurrentRefreshAcrossInstances(t *testing.T) {

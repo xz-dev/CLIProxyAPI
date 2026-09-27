@@ -162,12 +162,20 @@ func (h *Handler) APICall(c *gin.Context) {
 		return nil
 	}
 
+	writeResolveError := func(err error) {
+		response := gin.H{"error": err.Error()}
+		if coreauth.IsRefreshCredentialRejected(tokenErr) {
+			response["action"] = "re-login this credential and try again"
+		}
+		c.JSON(http.StatusBadRequest, response)
+	}
+
 	for key, value := range reqHeaders {
 		if !strings.Contains(value, "$TOKEN$") {
 			continue
 		}
 		if errToken := resolveToken(); errToken != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": errToken.Error()})
+			writeResolveError(errToken)
 			return
 		}
 		reqHeaders[key] = strings.ReplaceAll(value, "$TOKEN$", token)
@@ -175,7 +183,7 @@ func (h *Handler) APICall(c *gin.Context) {
 
 	if strings.Contains(body.Data, "$TOKEN$") {
 		if errToken := resolveToken(); errToken != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": errToken.Error()})
+			writeResolveError(errToken)
 			return
 		}
 		replacement := token
@@ -287,6 +295,16 @@ func (h *Handler) resolveTokenForAuth(ctx context.Context, auth *coreauth.Auth, 
 	if strings.EqualFold(strings.TrimSpace(auth.Provider), "xai") {
 		token, errToken := h.resolveXAIToken(ctx, auth, requestProxyURL)
 		return token, errToken
+	}
+
+	if h != nil && h.authManager != nil && auth.AuthKind() == coreauth.AuthKindOAuth {
+		refreshed, errRefresh := h.authManager.RefreshAuthIfNeeded(ctx, auth.ID)
+		if errRefresh != nil {
+			return "", errRefresh
+		}
+		if refreshed != nil {
+			auth = refreshed
+		}
 	}
 
 	return tokenValueForAuth(auth), nil

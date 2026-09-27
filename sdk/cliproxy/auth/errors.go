@@ -30,6 +30,10 @@ const transientTransportErrorCode = ErrorCodeTransientTransport
 // ErrorCodeForceCooldown marks failures that must enforce credential cooldown.
 const ErrorCodeForceCooldown = "force_cooldown"
 
+// ErrorCodeRefreshCredentialRejected marks an OAuth refresh credential that
+// cannot be retried and requires the credential owner to authenticate again.
+const ErrorCodeRefreshCredentialRejected = "refresh_credential_rejected"
+
 // Error describes an authentication related failure in a provider agnostic format.
 type Error struct {
 	// Code is a short machine readable identifier.
@@ -338,5 +342,16 @@ func WithCause(err *Error, cause error) error {
 	return &errorWithCause{
 		base:  err,
 		cause: cause,
+	}
+}
+
+// NewRefreshCredentialRejectedError creates a durable, provider-agnostic
+// refresh rejection without retaining the provider response body.
+func NewRefreshCredentialRejectedError(httpStatus int) *Error {
+	return &Error{
+		Code:       ErrorCodeRefreshCredentialRejected,
+		Message:    "refresh credential rejected",
+		Retryable:  false,
+		HTTPStatus: httpStatus,
 	}
 }

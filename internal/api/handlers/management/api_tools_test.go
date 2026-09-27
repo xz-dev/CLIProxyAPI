@@ -22,8 +22,437 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 )
+
+type apiCallRefreshExecutor struct {
+	refreshCalls atomic.Int32
+	refreshErr   error
+	refreshFunc  func(context.Context, *coreauth.Auth) (*coreauth.Auth, error)
+}
+
+func (*apiCallRefreshExecutor) Identifier() string { return "kimi" }
+
+func (*apiCallRefreshExecutor) Execute(context.Context, *coreauth.Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	return cliproxyexecutor.Response{}, nil
+}
+
+func (*apiCallRefreshExecutor) ExecuteStream(context.Context, *coreauth.Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	return nil, nil
+}
+
+func (e *apiCallRefreshExecutor) Refresh(ctx context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
+	e.refreshCalls.Add(1)
+	if e.refreshFunc != nil {
+		return e.refreshFunc(ctx, auth)
+	}
+	if e.refreshErr != nil {
+		return nil, e.refreshErr
+	}
+	if auth.Metadata == nil {
+		auth.Metadata = make(map[string]any)
+	}
+	auth.Metadata["access_token"] = "fresh-token"
+	auth.Metadata["expired"] = time.Now().Add(time.Hour).Format(time.RFC3339)
+	return auth, nil
+}
+
+func (*apiCallRefreshExecutor) CountTokens(context.Context, *coreauth.Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	return cliproxyexecutor.Response{}, nil
+}
+
+func (*apiCallRefreshExecutor) HttpRequest(context.Context, *coreauth.Auth, *http.Request) (*http.Response, error) {
+	return nil, nil
+}
+
+func TestAPICallRefreshesExpiredOAuthToken(t *testing.T) {
+	t.Parallel()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer fresh-token" {
+			t.Errorf("Authorization = %q, want %q", got, "Bearer fresh-token")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	executor := &apiCallRefreshExecutor{}
+	manager.RegisterExecutor(executor)
+	auth := &coreauth.Auth{
+		ID:       "kimi-test.json",
+		Provider: "kimi",
+		Metadata: map[string]any{
+			"access_token":  "stale-token",
+			"refresh_token": "refresh-token",
+			"expired":       time.Now().Add(-time.Minute).Format(time.RFC3339),
+		},
+	}
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+
+	h := &Handler{authManager: manager}
+	router := gin.New()
+	router.POST("/", h.APICall)
+	authIndex := auth.EnsureIndex()
+	body, errMarshal := json.Marshal(apiCallRequest{
+		AuthIndexSnake: &authIndex,
+		Method:         http.MethodGet,
+		URL:            upstream.URL,
+		Header:         map[string]string{"Authorization": "Bearer $TOKEN$"},
+	})
+	if errMarshal != nil {
+		t.Fatalf("marshal request: %v", errMarshal)
+	}
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := executor.refreshCalls.Load(); got != 1 {
+		t.Fatalf("refresh calls = %d, want 1", got)
+	}
+}
+
+func TestAPICallRefreshFailureRequestsRelogin(t *testing.T) {
+	t.Parallel()
+
+	var upstreamCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	executor := &apiCallRefreshExecutor{refreshErr: coreauth.NewRefreshCredentialRejectedError(http.StatusBadRequest)}
+	manager.RegisterExecutor(executor)
+	auth := &coreauth.Auth{
+		ID:       "kimi-test.json",
+		Provider: "kimi",
+		Metadata: map[string]any{
+			"access_token":  "stale-token",
+			"refresh_token": "invalid-refresh-token",
+			"expired":       time.Now().Add(-time.Minute).Format(time.RFC3339),
+		},
+	}
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+
+	h := &Handler{authManager: manager}
+	router := gin.New()
+	router.POST("/", h.APICall)
+	authIndex := auth.EnsureIndex()
+	body, errMarshal := json.Marshal(apiCallRequest{
+		AuthIndexSnake: &authIndex,
+		Method:         http.MethodGet,
+		URL:            upstream.URL,
+		Header:         map[string]string{"Authorization": "Bearer $TOKEN$"},
+	})
+	if errMarshal != nil {
+		t.Fatalf("marshal request: %v", errMarshal)
+	}
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(body)))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(recorder, req)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("attempt %d: status code = %d, want %d; body = %s", attempt, recorder.Code, http.StatusBadRequest, recorder.Body.String())
+		}
+		if got := recorder.Body.String(); !strings.Contains(got, "re-login") {
+			t.Fatalf("attempt %d: body = %s, want re-login guidance", attempt, got)
+		}
+	}
+	if got := executor.refreshCalls.Load(); got != 1 {
+		t.Fatalf("refresh calls = %d, want 1", got)
+	}
+	if got := upstreamCalls.Load(); got != 0 {
+		t.Fatalf("upstream calls = %d, want 0", got)
+	}
+}
+
+func TestAPICallTransientRefreshFailureDoesNotRequestRelogin(t *testing.T) {
+	t.Parallel()
+
+	var upstreamCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	executor := &apiCallRefreshExecutor{refreshErr: context.DeadlineExceeded}
+	manager.RegisterExecutor(executor)
+	auth := &coreauth.Auth{
+		ID:       "kimi-test.json",
+		Provider: "kimi",
+		Metadata: map[string]any{
+			"access_token":  "stale-token",
+			"refresh_token": "refresh-token",
+			"expired":       time.Now().Add(-time.Minute).Format(time.RFC3339),
+		},
+	}
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+
+	h := &Handler{authManager: manager}
+	router := gin.New()
+	router.POST("/", h.APICall)
+	authIndex := auth.EnsureIndex()
+	body, errMarshal := json.Marshal(apiCallRequest{
+		AuthIndexSnake: &authIndex,
+		Method:         http.MethodGet,
+		URL:            upstream.URL,
+		Header:         map[string]string{"Authorization": "Bearer $TOKEN$"},
+	})
+	if errMarshal != nil {
+		t.Fatalf("marshal request: %v", errMarshal)
+	}
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status code = %d, want %d; body = %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+	if got := recorder.Body.String(); strings.Contains(got, "re-login") {
+		t.Fatalf("body = %s, want no re-login guidance for transient failure", got)
+	}
+	if got := upstreamCalls.Load(); got != 0 {
+		t.Fatalf("upstream calls = %d, want 0", got)
+	}
+}
+
+func TestAPICallConcurrentRejectedRefreshRunsOnce(t *testing.T) {
+	t.Parallel()
+
+	var upstreamCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	manager := coreauth.NewManager(nil, nil, nil)
+	executor := &apiCallRefreshExecutor{refreshFunc: func(context.Context, *coreauth.Auth) (*coreauth.Auth, error) {
+		once.Do(func() { close(started) })
+		<-release
+		return nil, coreauth.NewRefreshCredentialRejectedError(http.StatusBadRequest)
+	}}
+	manager.RegisterExecutor(executor)
+	auth := &coreauth.Auth{
+		ID:       "kimi-test.json",
+		Provider: "kimi",
+		Metadata: map[string]any{
+			"access_token":  "stale-token",
+			"refresh_token": "rejected-refresh-token",
+			"expired":       time.Now().Add(-time.Minute).Format(time.RFC3339),
+		},
+	}
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+
+	h := &Handler{authManager: manager}
+	router := gin.New()
+	router.POST("/", h.APICall)
+	authIndex := auth.EnsureIndex()
+	body, errMarshal := json.Marshal(apiCallRequest{
+		AuthIndexSnake: &authIndex,
+		Method:         http.MethodGet,
+		URL:            upstream.URL,
+		Header:         map[string]string{"Authorization": "Bearer $TOKEN$"},
+	})
+	if errMarshal != nil {
+		t.Fatalf("marshal request: %v", errMarshal)
+	}
+
+	const callers = 2
+	type response struct {
+		status int
+		body   string
+	}
+	responses := make(chan response, callers)
+	request := func() {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(body)))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(recorder, req)
+		responses <- response{status: recorder.Code, body: recorder.Body.String()}
+	}
+
+	go request()
+	<-started
+	go request()
+	close(release)
+
+	for range callers {
+		got := <-responses
+		if got.status != http.StatusBadRequest || !strings.Contains(got.body, "re-login") {
+			t.Fatalf("response = (%d, %s), want bad request with re-login guidance", got.status, got.body)
+		}
+	}
+	if got := executor.refreshCalls.Load(); got != 1 {
+		t.Fatalf("refresh calls = %d, want 1", got)
+	}
+	if got := upstreamCalls.Load(); got != 0 {
+		t.Fatalf("upstream calls = %d, want 0", got)
+	}
+}
+
+func TestAPICallConcurrentRefreshUsesOneRotation(t *testing.T) {
+	t.Parallel()
+
+	var upstreamCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls.Add(1)
+		if got := r.Header.Get("Authorization"); got != "Bearer fresh-token" {
+			t.Errorf("Authorization = %q, want %q", got, "Bearer fresh-token")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	manager := coreauth.NewManager(nil, nil, nil)
+	executor := &apiCallRefreshExecutor{refreshFunc: func(_ context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
+		once.Do(func() { close(started) })
+		<-release
+		if auth.Metadata == nil {
+			auth.Metadata = make(map[string]any)
+		}
+		auth.Metadata["access_token"] = "fresh-token"
+		auth.Metadata["expired"] = time.Now().Add(time.Hour).Format(time.RFC3339)
+		return auth, nil
+	}}
+	manager.RegisterExecutor(executor)
+	auth := &coreauth.Auth{
+		ID:       "kimi-test.json",
+		Provider: "kimi",
+		Metadata: map[string]any{
+			"access_token":  "stale-token",
+			"refresh_token": "refresh-token",
+			"expired":       time.Now().Add(-time.Minute).Format(time.RFC3339),
+		},
+	}
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+
+	h := &Handler{authManager: manager}
+	router := gin.New()
+	router.POST("/", h.APICall)
+	authIndex := auth.EnsureIndex()
+	body, errMarshal := json.Marshal(apiCallRequest{
+		AuthIndexSnake: &authIndex,
+		Method:         http.MethodGet,
+		URL:            upstream.URL,
+		Header:         map[string]string{"Authorization": "Bearer $TOKEN$"},
+	})
+	if errMarshal != nil {
+		t.Fatalf("marshal request: %v", errMarshal)
+	}
+
+	const callers = 2
+	statuses := make(chan int, callers)
+	request := func() {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(body)))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(recorder, req)
+		statuses <- recorder.Code
+	}
+
+	go request()
+	<-started
+	go request()
+	close(release)
+
+	for i := 0; i < callers; i++ {
+		if status := <-statuses; status != http.StatusOK {
+			t.Fatalf("status code = %d, want %d", status, http.StatusOK)
+		}
+	}
+	if got := executor.refreshCalls.Load(); got != 1 {
+		t.Fatalf("refresh calls = %d, want 1", got)
+	}
+	if got := upstreamCalls.Load(); got != callers {
+		t.Fatalf("upstream calls = %d, want %d", got, callers)
+	}
+}
+
+func TestAPICallKeepsFreshOAuthToken(t *testing.T) {
+	t.Parallel()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer current-token" {
+			t.Errorf("Authorization = %q, want %q", got, "Bearer current-token")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	executor := &apiCallRefreshExecutor{}
+	manager.RegisterExecutor(executor)
+	auth := &coreauth.Auth{
+		ID:       "kimi-test.json",
+		Provider: "kimi",
+		Metadata: map[string]any{
+			"access_token":  "current-token",
+			"refresh_token": "refresh-token",
+			"expired":       time.Now().Add(time.Hour).Format(time.RFC3339),
+		},
+	}
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+
+	h := &Handler{authManager: manager}
+	router := gin.New()
+	router.POST("/", h.APICall)
+	authIndex := auth.EnsureIndex()
+	body, errMarshal := json.Marshal(apiCallRequest{
+		AuthIndexSnake: &authIndex,
+		Method:         http.MethodGet,
+		URL:            upstream.URL,
+		Header:         map[string]string{"Authorization": "Bearer $TOKEN$"},
+	})
+	if errMarshal != nil {
+		t.Fatalf("marshal request: %v", errMarshal)
+	}
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := executor.refreshCalls.Load(); got != 0 {
+		t.Fatalf("refresh calls = %d, want 0", got)
+	}
+}
 
 func TestAPICallUsesRequestProxyURL(t *testing.T) {
 	t.Parallel()
