@@ -1,4 +1,4 @@
-name: Build CPA v7.2.146 downstream candidate
+name: Build CPA v7.3.19 downstream candidate
 
 on:
   push:
@@ -9,15 +9,15 @@ permissions:
   packages: write
 
 concurrency:
-  group: cpa-v7.2.146-downstream-candidate-${{ github.ref }}
+  group: cpa-v7.3.19-downstream-candidate-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   SOURCE_REPOSITORY: xz-dev/CLIProxyAPI
-  SOURCE_SHA: 0f10a3635c39984d9eae139a4d7b3759f51ec6d0
+  SOURCE_SHA: 2c924fd72009e1b8160755a5767f25c6f53c2484
   IMAGE: ghcr.io/xz-dev/cli-proxy-api
-  IMAGE_TAG: v7.2.146-xz.1
-  BUILD_DATE: "2026-09-01T07:31:33Z"
+  IMAGE_TAG: v7.3.19-xz.1
+  BUILD_DATE: "2026-09-27T09:14:41Z"
 
 jobs:
   verify:
