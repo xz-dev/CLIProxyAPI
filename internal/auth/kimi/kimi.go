@@ -629,11 +629,16 @@ func (c *DeviceFlowClient) refreshTokenSingleFlight(ctx context.Context, refresh
 		return nil, fmt.Errorf("kimi: failed to read refresh response: %w", err)
 	}
 
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("kimi: refresh token rejected (status %d)", resp.StatusCode)
-	}
-
 	if resp.StatusCode != http.StatusOK {
+		var oauthResp struct {
+			Error string `json:"error"`
+		}
+		if errJSON := json.Unmarshal(bodyBytes, &oauthResp); errJSON == nil && strings.EqualFold(strings.TrimSpace(oauthResp.Error), "invalid_grant") {
+			return nil, cliproxyauth.NewRefreshCredentialRejectedError(resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, cliproxyauth.NewRefreshCredentialRejectedError(resp.StatusCode)
+		}
 		return nil, fmt.Errorf("kimi: refresh failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 

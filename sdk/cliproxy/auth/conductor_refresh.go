@@ -118,7 +118,7 @@ func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
 	if a == nil {
 		return false
 	}
-	if hasUnauthorizedAuthFailure(a) || hasDisabledInvalidGrantFailure(a) {
+	if hasRejectedRefreshCredential(a) || hasDisabledInvalidGrantFailure(a) {
 		return false
 	}
 	if !a.NextRefreshAfter.IsZero() && now.Before(a.NextRefreshAfter) {
@@ -513,6 +513,41 @@ func (m *Manager) refreshAuth(ctx context.Context, id string) {
 	_, _ = m.refreshAuthForRequest(ctx, id, "")
 }
 
+// IsRefreshCredentialRejected reports whether a refresh failure requires the
+// credential owner to authenticate again instead of retrying automatically.
+func IsRefreshCredentialRejected(err error) bool {
+	return isRefreshCredentialRejected(err) || isUnauthorizedError(err)
+}
+
+// RefreshAuthIfNeeded synchronously refreshes an auth when its normal refresh
+// policy says the credential is due. Otherwise it returns the current auth.
+func (m *Manager) RefreshAuthIfNeeded(ctx context.Context, id string) (*Auth, error) {
+	if m == nil {
+		return nil, errors.New("auth manager is nil")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, errors.New("auth id is empty")
+	}
+
+	m.mu.RLock()
+	auth := m.auths[id]
+	if auth != nil {
+		auth = auth.Clone()
+	}
+	m.mu.RUnlock()
+	if auth == nil {
+		return nil, errors.New("auth not found")
+	}
+	if hasRejectedRefreshCredential(auth) {
+		return nil, auth.LastError
+	}
+	if !m.shouldRefresh(auth, time.Now()) {
+		return auth, nil
+	}
+	return m.refreshAuthForRequest(ctx, id, authAccessToken(auth))
+}
+
 // refreshAuthForRequest performs a synchronous credential refresh for the given auth.
 // failedAccessToken lets concurrent callers reuse a refresh that already replaced the
 // access token that produced the unauthorized response.
@@ -553,6 +588,9 @@ func (m *Manager) refreshAuthForRequest(ctx context.Context, id, failedAccessTok
 	if hasDisabledInvalidGrantFailure(auth) {
 		return nil, errors.New("auth is disabled with invalid grant")
 	}
+	if auth.LastError != nil && auth.LastError.Code == ErrorCodeRefreshCredentialRejected {
+		return nil, auth.LastError
+	}
 
 	// Another request may already have refreshed this credential.
 	if failedAccessToken != "" {
@@ -575,9 +613,16 @@ func (m *Manager) refreshAuthForRequest(ctx context.Context, id, failedAccessTok
 		shouldReschedule := false
 		isDisabled := false
 		isPermanentlyDisabled := false
+		var rejectedSnapshot *Auth
 		m.mu.Lock()
 		if current := m.auths[id]; current != nil {
 			if base != nil && current.RegistrationEpoch != base.RegistrationEpoch {
+				m.mu.Unlock()
+				return nil, err
+			}
+			if base != nil && CredentialsChanged(base, current) {
+				// Credentials changed while the refresh was in flight (e.g. a
+				// relogin); do not stamp the old credential's failure onto them.
 				m.mu.Unlock()
 				return nil, err
 			}
@@ -587,7 +632,15 @@ func (m *Manager) refreshAuthForRequest(ctx context.Context, id, failedAccessTok
 
 			isDisabled = current.Disabled || current.Status == StatusDisabled
 			hasValidAccessToken := current.HasValidAccessToken(now)
-			if isDisabled && invalidGrant {
+			if rejected := isRefreshCredentialRejected(err); rejected {
+				// Refresh credential was rejected durably: block the auth until the
+				// owner authenticates again instead of scheduling automatic retries.
+				current.Unavailable = true
+				current.Status = StatusError
+				current.NextRefreshAfter = time.Time{}
+				current.RefreshFailures = 0
+				current.StatusMessage = "refresh credential rejected"
+			} else if isDisabled && invalidGrant {
 				current.Unavailable = true
 				current.Status = StatusDisabled
 				current.NextRefreshAfter = time.Time{}
@@ -643,8 +696,16 @@ func (m *Manager) refreshAuthForRequest(ctx context.Context, id, failedAccessTok
 			if m.scheduler != nil {
 				m.scheduler.upsertAuth(current.Clone())
 			}
+			if isRefreshCredentialRejected(err) {
+				rejectedSnapshot = current.Clone()
+			}
 		}
 		m.mu.Unlock()
+		if rejectedSnapshot != nil {
+			if errPersist := m.persist(ctx, rejectedSnapshot); errPersist != nil {
+				return nil, fmt.Errorf("persist rejected refresh credential: %v: %w", errPersist, err)
+			}
+		}
 		if shouldReschedule {
 			m.queueRefreshReschedule(id)
 		} else if isPermanentlyDisabled {

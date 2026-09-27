@@ -1712,9 +1712,36 @@ func HasDisabledInvalidGrantFailure(auth *Auth) bool {
 	return hasDisabledInvalidGrantFailure(auth)
 }
 
+func isRefreshCredentialRejected(err error) bool {
+	if err == nil {
+		return false
+	}
+	var authErr *Error
+	return errors.As(err, &authErr) && authErr != nil && authErr.Code == ErrorCodeRefreshCredentialRejected
+}
+
+func hasRejectedRefreshCredential(auth *Auth) bool {
+	if auth == nil || auth.LastError == nil {
+		return false
+	}
+	return auth.LastError.Code == ErrorCodeRefreshCredentialRejected || hasUnauthorizedAuthFailure(auth)
+}
+
 func refreshErrorFromError(err error) *Error {
 	if err == nil {
 		return nil
+	}
+	var sourceErr *Error
+	if errors.As(err, &sourceErr) && sourceErr != nil {
+		result := cloneError(sourceErr)
+		if result.HTTPStatus == 0 && isUnauthorizedError(err) {
+			result.HTTPStatus = http.StatusUnauthorized
+		}
+		if result.HTTPStatus == http.StatusUnauthorized && result.Code == "" {
+			result.Code = "unauthorized"
+			result.Retryable = false
+		}
+		return result
 	}
 	statusCode := statusCodeFromError(err)
 	if statusCode == 0 && isUnauthorizedError(err) {

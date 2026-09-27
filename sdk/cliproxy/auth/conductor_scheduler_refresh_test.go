@@ -46,6 +46,60 @@ func (e unauthorizedRefreshTestExecutor) Refresh(ctx context.Context, auth *Auth
 	return nil, errors.New("token refresh failed with status 401: invalid_grant")
 }
 
+type rejectedRefreshTestExecutor struct {
+	schedulerProviderTestExecutor
+}
+
+func (e rejectedRefreshTestExecutor) Refresh(ctx context.Context, auth *Auth) (*Auth, error) {
+	return nil, NewRefreshCredentialRejectedError(http.StatusBadRequest)
+}
+
+func TestManager_RefreshAuthRejectedCredentialStopsAutoRefreshRetry(t *testing.T) {
+	ctx := context.Background()
+	manager := NewManager(nil, &RoundRobinSelector{}, nil)
+	manager.RegisterExecutor(rejectedRefreshTestExecutor{
+		schedulerProviderTestExecutor: schedulerProviderTestExecutor{provider: "kimi"},
+	})
+
+	auth := &Auth{
+		ID:       "rejected-refresh",
+		Provider: "kimi",
+		Metadata: map[string]any{
+			"access_token":  "stale-token",
+			"refresh_token": "rejected-refresh-token",
+		},
+	}
+	if _, errRegister := manager.Register(ctx, auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+
+	manager.refreshAuth(ctx, auth.ID)
+
+	updated, ok := manager.GetByID(auth.ID)
+	if !ok {
+		t.Fatalf("expected auth %q after refresh", auth.ID)
+	}
+	if updated.LastError == nil || updated.LastError.Code != ErrorCodeRefreshCredentialRejected {
+		t.Fatalf("LastError = %#v, want refresh credential rejected", updated.LastError)
+	}
+	if got := updated.LastError.StatusCode(); got != http.StatusBadRequest {
+		t.Fatalf("LastError.StatusCode() = %d, want %d", got, http.StatusBadRequest)
+	}
+	if !updated.Unavailable || updated.Status != StatusError {
+		t.Fatalf("auth state = unavailable:%t status:%s, want durable blocked state", updated.Unavailable, updated.Status)
+	}
+	if !updated.NextRefreshAfter.IsZero() {
+		t.Fatalf("NextRefreshAfter = %s, want zero for rejected refresh credential", updated.NextRefreshAfter)
+	}
+	now := time.Now()
+	if manager.shouldRefresh(updated, now) {
+		t.Fatal("expected rejected refresh credential to stop refresh attempts")
+	}
+	if _, shouldSchedule := nextRefreshCheckAt(now, updated, time.Second); shouldSchedule {
+		t.Fatal("expected rejected refresh credential to be removed from the auto-refresh schedule")
+	}
+}
+
 func TestManager_RefreshAuthUnauthorizedFailureStopsAutoRefreshRetry(t *testing.T) {
 	ctx := context.Background()
 	manager := NewManager(nil, &RoundRobinSelector{}, nil)
