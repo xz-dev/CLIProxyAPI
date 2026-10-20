@@ -59,6 +59,10 @@ var logFieldOrder = []string{
 	"credential", "auth_id", "auth_index", "connection", "proxy_scheme", "remote_transport",
 	"operation", "upstream_host", "reused", "was_idle", "idle_time",
 	"media_session_id", "call_id", "peer", "state", "reason",
+	// Bounded Codex stream-tracer milestones and SSE framing diagnostics (counts only).
+	"stage", "elapsed_ms", "status", "execution_id",
+	"body_bytes", "events_in", "chunks_out",
+	"data_lines", "line_bytes", "lines_valid", "data_bytes", "json_error_offset",
 }
 
 var quotedLogFields = map[string]struct{}{

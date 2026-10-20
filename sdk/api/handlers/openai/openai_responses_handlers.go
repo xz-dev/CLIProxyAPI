@@ -23,9 +23,11 @@ import (
 	. "github.com/router-for-me/CLIProxyAPI/v8/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/httpwire"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -61,7 +63,37 @@ func flushResponsesSSE(w http.ResponseWriter) error {
 	return httpwire.FlushResponse(w)
 }
 
+// responsesApplicationWriter observes accepted SSE data bytes, not heartbeat,
+// framing-buffer input, flush success, or receipt by the remote peer.
+type responsesApplicationWriter struct {
+	io.Writer
+	ctx context.Context
+}
+
+func (w responsesApplicationWriter) Write(p []byte) (int, error) {
+	n, errWrite := w.Writer.Write(p)
+	if errWrite == nil && n > 0 && log.IsLevelEnabled(log.DebugLevel) {
+		accepted := n
+		for len(p) > 0 && accepted > 0 {
+			frameLen := responsesSSEFrameLen(p)
+			if frameLen == 0 {
+				frameLen = len(p)
+			}
+			frame := p[:frameLen]
+			p = p[frameLen:]
+			accepted -= frameLen
+			payload, ok := responsesSSEDataPayload(frame)
+			if ok && len(payload) > 0 && !bytes.Equal(bytes.TrimSpace(payload), []byte("[DONE]")) && responsesSSEEventName(frame) != "keepalive" && gjson.GetBytes(payload, "type").String() != "keepalive" {
+				logging.MarkCodexDownstreamWrite(w.ctx, n)
+				break
+			}
+		}
+	}
+	return n, errWrite
+}
+
 type responsesSSEFramer struct {
+	applicationWriter    io.Writer
 	pending              []byte
 	outputItems          map[int][]byte
 	outputOrder          []int
@@ -730,6 +762,8 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 	deliveryCtx, finishDelivery := usage.WithStreamDelivery(context.Background())
 	defer finishDelivery(context.Canceled)
 	cliCtx, cancelExecution := h.GetContextWithCancel(h, c, deliveryCtx)
+	cliCtx = logging.WithCodexStreamTrace(cliCtx)
+	applicationWriter := responsesApplicationWriter{Writer: c.Writer, ctx: cliCtx}
 	cliCancel := func(err error) {
 		finishDelivery(err)
 		cancelExecution(err)
@@ -749,6 +783,9 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 		setSSEHeaders()
 		handlers.WriteUpstreamHeaders(c.Writer.Header(), upstreamHeaders)
 		committed = true
+	}
+	writeData := func(chunk []byte) error {
+		return writeResponsesSSEChunk(applicationWriter, chunk)
 	}
 	writeKeepAlive := func() bool {
 		commitSSE()
@@ -778,7 +815,7 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 	if isCodexClient {
 		failureEvent = "response.failed"
 	}
-	framer := &responsesSSEFramer{failureEvent: failureEvent, isCodexClient: isCodexClient, canComplete: func() bool { return usage.StreamDeliverySupported(cliCtx) }}
+	framer := &responsesSSEFramer{applicationWriter: applicationWriter, failureEvent: failureEvent, isCodexClient: isCodexClient, canComplete: func() bool { return usage.StreamDeliverySupported(cliCtx) }}
 	var initialOutput bytes.Buffer
 
 	// Peek at the first complete SSE data frame.
@@ -799,7 +836,7 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 				safeErrMsg := sanitizeResponsesStreamErrorMessage(errMsg)
 				commitSSE()
 				if initialOutput.Len() > 0 {
-					if errWrite := writeResponsesSSEChunk(c.Writer, initialOutput.Bytes()); errWrite != nil {
+					if errWrite := writeData(initialOutput.Bytes()); errWrite != nil {
 						cliCancel(errWrite)
 						return
 					}
@@ -849,7 +886,7 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 					stopKeepAlive()
 					commitSSE()
 					if initialOutput.Len() > 0 {
-						if errWrite := writeResponsesSSEChunk(c.Writer, initialOutput.Bytes()); errWrite != nil {
+						if errWrite := writeData(initialOutput.Bytes()); errWrite != nil {
 							cliCancel(errWrite)
 							return
 						}
@@ -891,7 +928,7 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 
 			stopKeepAlive()
 			commitSSE()
-			if errWrite := writeResponsesSSEChunk(c.Writer, initialOutput.Bytes()); errWrite != nil {
+			if errWrite := writeData(initialOutput.Bytes()); errWrite != nil {
 				cliCancel(errWrite)
 				return
 			}
@@ -1100,6 +1137,10 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flush
 	if framer == nil {
 		framer = &responsesSSEFramer{}
 	}
+	applicationWriter := framer.applicationWriter
+	if applicationWriter == nil {
+		applicationWriter = c.Writer
+	}
 	if isCodexResponsesClientRequest(c) {
 		framer.failureEvent = "response.failed"
 		framer.isCodexClient = true
@@ -1120,7 +1161,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flush
 		return
 	}
 	writeTerminalError := func(errMsg *interfaces.ErrorMessage) {
-		framer.Flush(c.Writer)
+		framer.Flush(applicationWriter)
 		if errMsg == nil {
 			return
 		}
@@ -1153,7 +1194,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flush
 		NormalizeTerminalError: sanitizeResponsesStreamErrorMessage,
 		Flush:                  func() error { return flushResponsesSSE(c.Writer) },
 		WriteChunk: func(chunk []byte) {
-			framer.WriteChunk(c.Writer, chunk)
+			framer.WriteChunk(applicationWriter, chunk)
 		},
 		ChunkDone: func() bool {
 			return framer.canComplete != nil && framer.canComplete() && framer.terminalEvent == "response.completed" && framer.writeErr == nil
@@ -1169,7 +1210,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flush
 		},
 		WriteTerminalError: writeTerminalError,
 		CloseError: func() *interfaces.ErrorMessage {
-			framer.Flush(c.Writer)
+			framer.Flush(applicationWriter)
 			if framer.writeErr != nil {
 				return &interfaces.ErrorMessage{Error: framer.writeErr}
 			}
@@ -1189,7 +1230,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flush
 			}
 		},
 		WriteDone: func() {
-			framer.Flush(c.Writer)
+			framer.Flush(applicationWriter)
 			_, _ = c.Writer.Write([]byte("\n"))
 		},
 	})
