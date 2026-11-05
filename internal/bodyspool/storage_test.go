@@ -247,3 +247,29 @@ func TestNewRuntimeRefusesWithoutMemoryMax(t *testing.T) {
 		t.Fatalf("charge after memory.max vanished: %v", err)
 	}
 }
+
+// TestFallbackChargesOncePerRequest: the k_path × N fallback charge is taken once per request,
+// not again on every retry attempt or for the second (original-request) copy (m3).
+func TestFallbackChargesOncePerRequest(t *testing.T) {
+	sk, sp := ingest(t, sampleBody())
+	cfg := config.BodySpoolConfig{KPath: 9, FallbackLimitBytes: 16 << 20}
+	rt := &Runtime{Cfg: cfg, Charger: &Charger{CgroupDir: bodyspooltest.CgroupDir(t), Hop: Hop}}
+	r := rt.NewRequest("", true)
+	r.SetSpool(sp)
+	n, err := sp.Size(sk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		if _, err := r.Fallback(sk, "executor x"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := rt.Charger.Outstanding(), Scaled(9, n); got != want {
+		t.Fatalf("charged %d after 3 attempts, want %d (once)", got, want)
+	}
+	r.Close()
+	if rt.Charger.Outstanding() != 0 {
+		t.Fatal("fallback charge not released")
+	}
+}
