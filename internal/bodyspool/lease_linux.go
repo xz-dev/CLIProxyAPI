@@ -39,11 +39,11 @@ func AcquireLease(ledgerDir, id string, size int64, hop string) (*Lease, error) 
 	if !ValidTicketID(id) {
 		return nil, TicketInvalid(hop, "malformed id")
 	}
-	fd, err := unix.Open(filepath.Join(ledgerDir, id), unix.O_RDONLY|unix.O_CLOEXEC, 0)
+	fd, err := unix.Open(filepath.Join(ledgerDir, id+TicketSuffix), unix.O_RDONLY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, TicketInvalid(hop, "cannot open ticket")
 	}
-	f := os.NewFile(uintptr(fd), id)
+	f := os.NewFile(uintptr(fd), id+TicketSuffix)
 	for {
 		err = unix.Flock(fd, unix.LOCK_SH)
 		if !errors.Is(err, unix.EINTR) {

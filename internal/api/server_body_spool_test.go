@@ -87,7 +87,7 @@ func errCode(t *testing.T, w *httptest.ResponseRecorder) (string, string) {
 func TestBodySpoolRouteContracts(t *testing.T) {
 	ledger := t.TempDir()
 	id := strings.Repeat("0f", 16)
-	if err := os.WriteFile(filepath.Join(ledger, id), []byte("n\n"), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(ledger, id+bodyspool.TicketSuffix), []byte("n\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	engine, seen := spoolEngine(t, ledger)
@@ -97,7 +97,7 @@ func TestBodySpoolRouteContracts(t *testing.T) {
 	if w.Code != http.StatusOK || seen.ticketHeader != "" || seen.blobs != 1 || !seen.leaseHeld || !bytes.Contains(seen.skeleton, []byte(bodyspool.MarkerPrefix)) {
 		t.Fatalf("covered route: code=%d header=%q blobs=%d lease=%v", w.Code, seen.ticketHeader, seen.blobs, seen.leaseHeld)
 	}
-	fd, _ := unix.Open(filepath.Join(ledger, id), unix.O_RDONLY, 0)
+	fd, _ := unix.Open(filepath.Join(ledger, id+bodyspool.TicketSuffix), unix.O_RDONLY, 0)
 	defer unix.Close(fd)
 	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		t.Fatalf("lease still held after the handler returned: %v", err)

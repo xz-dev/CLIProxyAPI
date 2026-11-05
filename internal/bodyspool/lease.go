@@ -6,7 +6,9 @@ const (
 	TicketHeader = "X-AI-Gateway-Capacity-Ticket"
 	// TicketThreshold is the body size at and above which a ticket is required (D4).
 	TicketThreshold = 64 << 20
-	ticketIDLen     = 32 // 128-bit id, lowercase hex; the ticket's file name in the ledger
+	// TicketSuffix completes the ledger file name: every hop opens <ledger>/<id>.ticket (D4).
+	TicketSuffix = ".ticket"
+	ticketIDLen  = 32 // 128-bit id, lowercase hex
 )
 
 // ValidTicketID reports whether id is 32 lowercase hex characters.
