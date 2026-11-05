@@ -62,7 +62,7 @@ func TestDiskFloorIs507AndNeverMemory(t *testing.T) {
 func ticket(t *testing.T) (string, string) {
 	dir := t.TempDir()
 	id := strings.Repeat("ab", 16)
-	if err := os.WriteFile(filepath.Join(dir, id), []byte("n=1\n"), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, id+TicketSuffix), []byte("n=1\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	return dir, id
@@ -74,7 +74,7 @@ func TestLeaseHoldsSharedLock(t *testing.T) {
 	if err != nil || l == nil {
 		t.Fatalf("lease: %v", err)
 	}
-	fd, _ := unix.Open(filepath.Join(dir, id), unix.O_RDONLY, 0)
+	fd, _ := unix.Open(filepath.Join(dir, id+TicketSuffix), unix.O_RDONLY, 0)
 	defer unix.Close(fd)
 	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err == nil {
 		t.Fatal("exclusive lock granted while the lease is held")
@@ -83,6 +83,50 @@ func TestLeaseHoldsSharedLock(t *testing.T) {
 	l.Release()
 	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		t.Fatalf("exclusive lock after release: %v", err)
+	}
+}
+
+// D4 contract: the lease opens <ledger>/<id>.ticket, never the bare id.
+func TestLeaseOpensDotTicketFile(t *testing.T) {
+	dir := t.TempDir()
+	id := strings.Repeat("ab", 16)
+	if err := os.WriteFile(filepath.Join(dir, id), []byte("n=1\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	var e *Error
+	if _, err := AcquireLease(dir, id, TicketThreshold, "cpa"); !errors.As(err, &e) || e.Code != "capacity_ticket_invalid" {
+		t.Fatalf("bare-id file leased: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, id+TicketSuffix), []byte("n=1\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	l, err := AcquireLease(dir, id, TicketThreshold, "cpa")
+	if err != nil || l == nil {
+		t.Fatalf("%s not leased: %v", id+TicketSuffix, err)
+	}
+	l.Release()
+}
+
+// A malformed or path-like id is refused with capacity_ticket_invalid before any path is built,
+// even when the traversal target exists.
+func TestLeaseMalformedIDRefused(t *testing.T) {
+	root := t.TempDir()
+	ledger := filepath.Join(root, "ledger")
+	if err := os.Mkdir(ledger, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("ab", 16)
+	for _, name := range []string{"x", id[:29]} { // targets of the "../" ids below
+		if err := os.WriteFile(filepath.Join(root, name+TicketSuffix), nil, 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, bad := range []string{"../x", "../" + id[:29], id[:31], id + "0", strings.ToUpper(id), id[:30] + "/x", id[:31] + "\x00"} {
+		l, err := AcquireLease(ledger, bad, TicketThreshold, "cpa")
+		var e *Error
+		if l != nil || !errors.As(err, &e) || e.Code != "capacity_ticket_invalid" || e.Status != 503 {
+			t.Fatalf("id %q: lease %v, error %v", bad, l, err)
+		}
 	}
 }
 
@@ -110,12 +154,12 @@ func TestLeaseRefusals(t *testing.T) {
 		t.Fatalf("small ticketless request: %v %v", l, err)
 	}
 	// a ticket released (unlinked) while the hop waited for LOCK_SH is refused
-	fd, _ := unix.Open(filepath.Join(dir, id), unix.O_RDONLY, 0)
+	fd, _ := unix.Open(filepath.Join(dir, id+TicketSuffix), unix.O_RDONLY, 0)
 	_ = unix.Flock(fd, unix.LOCK_EX)
 	done := make(chan error, 1)
 	go func() { _, err := AcquireLease(dir, id, TicketThreshold, "cpa"); done <- err }()
 	time.Sleep(200 * time.Millisecond) // let the goroutine open the ticket and block in LOCK_SH
-	_ = os.Remove(filepath.Join(dir, id))
+	_ = os.Remove(filepath.Join(dir, id+TicketSuffix))
 	_ = unix.Close(fd)
 	if err := <-done; err == nil || !strings.Contains(err.Error(), "already released") {
 		t.Fatalf("unlinked ticket: %v", err)
