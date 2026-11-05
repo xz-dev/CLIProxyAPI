@@ -315,7 +315,8 @@ func RecordAPIWebsocketRequest(ctx context.Context, cfg *config.Config, info Ups
 	writeHeaders(builder, info.Headers)
 	builder.WriteString("\nBody:\n")
 	if len(info.Body) > 0 {
-		builder.Write(info.Body)
+		// Body spool: the skeleton with markers redacted, as in RecordAPIRequest.
+		builder.Write(bodyspool.SpoolFrom(ctx).Redact(info.Body))
 	} else {
 		builder.WriteString("<empty>")
 	}

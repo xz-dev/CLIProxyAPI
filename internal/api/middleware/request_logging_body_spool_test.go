@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,11 +14,13 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 )
 
 // TestRequestLogTakesSkeletonOnly: with the body spool, the request log and the error-only
-// capture record the redacted skeleton; no blob byte and no nonce reaches a log file.
+// capture record the redacted skeleton, and so do the upstream HTTP and WebSocket request logs;
+// no blob byte and no nonce reaches a log file.
 func TestRequestLogTakesSkeletonOnly(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	blob := strings.Repeat("QUJD", 64<<10)
@@ -46,6 +49,12 @@ func TestRequestLogTakesSkeletonOnly(t *testing.T) {
 			}
 			i := bytes.Index(raw, []byte(bodyspool.MarkerPrefix))
 			nonce = string(raw[i+len(bodyspool.MarkerPrefix) : i+len(bodyspool.MarkerPrefix)+32])
+			sr, _ := c.Get(bodyspool.GinKey)
+			ctx := bodyspool.WithRequest(context.WithValue(c.Request.Context(), "gin", c), sr.(*bodyspool.Request))
+			cfg := &config.Config{}
+			cfg.RequestLog = full
+			helps.RecordAPIRequest(ctx, cfg, helps.UpstreamRequestLog{URL: "https://up.example/v1/responses", Method: http.MethodPost, Body: raw})
+			helps.RecordAPIWebsocketRequest(ctx, cfg, helps.UpstreamRequestLog{URL: "wss://up.example/v1/responses", Method: "WEBSOCKET", Body: raw})
 			c.JSON(http.StatusBadGateway, gin.H{"error": "upstream failed"})
 		})
 		req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
@@ -60,6 +69,9 @@ func TestRequestLogTakesSkeletonOnly(t *testing.T) {
 		})
 		if !bytes.Contains(logged, []byte("keep me")) || !bytes.Contains(logged, []byte(bodyspool.MarkerPrefix+strings.Repeat("x", 32))) {
 			t.Fatalf("full=%v: redacted skeleton not logged (%d bytes)", full, len(logged))
+		}
+		if full && !bytes.Contains(logged, []byte("Event: api.websocket.request")) {
+			t.Fatalf("websocket request event not logged")
 		}
 		if bytes.Contains(logged, []byte(blob[:4096])) || nonce == "" || bytes.Contains(logged, []byte(nonce)) {
 			t.Fatalf("full=%v: blob bytes or nonce reached the log", full)
