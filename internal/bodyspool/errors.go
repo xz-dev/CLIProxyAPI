@@ -39,6 +39,10 @@ func (e *Error) Error() string {
 // StatusCode returns the HTTP status of the error.
 func (e *Error) StatusCode() int { return e.Status }
 
+// IsRequestScoped marks every hop refusal as a fault of this request, not of a credential: the
+// conductor stops without retry, rotation or cooldown (cliproxyexecutor.RequestScopedError).
+func (e *Error) IsRequestScoped() bool { return true }
+
 // FallbackTooLarge is the named 413 for a body above a fallback path's limit L.
 func FallbackTooLarge(hop, path string, size, limit int64) *Error {
 	return &Error{Status: 413, Code: "request_too_large", Hop: hop, Limit: limit,

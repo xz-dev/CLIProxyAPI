@@ -259,6 +259,11 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 				}
 				warnLogUpstreamFailure(execCtx, entry, selection.Provider, upstreamModel, preparedAuth, durationHomeExec, errExecute)
 			}
+			if isBodySpoolError(errExecute) {
+				releaseAttempt()
+				selection.End("request_invalid")
+				return cliproxyexecutor.Response{}, errExecute
+			}
 			result := Result{AuthID: preparedAuth.ID, Provider: selection.Provider, Model: resultModel, RouteModel: routeModel, Success: errExecute == nil, Options: execOpts}
 			if errExecute == nil {
 				m.reportHomeResult(execCtx, result, preparedAuth)
