@@ -393,7 +393,9 @@ func codexStatusErrorClassification(statusCode int, body []byte) (code string, e
 	isInvalidRequest := upstreamType == "" || upstreamType == "invalid_request_error"
 
 	switch {
-	case statusCode == http.StatusRequestEntityTooLarge || upstreamCode == "context_length_exceeded" || upstreamCode == "context_too_large" || isInvalidRequest && (strings.Contains(errorMessage, "context length") || strings.Contains(errorMessage, "context_length") || strings.Contains(errorMessage, "maximum context") || strings.Contains(errorMessage, "too many tokens")):
+	// A 413 is context_too_large only when the provider signals context length; any other
+	// provider 413 (a byte-size request_too_large, an unknown code) keeps its own body.
+	case upstreamCode == "context_length_exceeded" || upstreamCode == "context_too_large" || isInvalidRequest && (strings.Contains(errorMessage, "context length") || strings.Contains(errorMessage, "context_length") || strings.Contains(errorMessage, "maximum context") || strings.Contains(errorMessage, "too many tokens")):
 		return "context_too_large", "invalid_request_error", true
 	case strings.Contains(lower, "invalid signature in thinking block") || strings.Contains(lower, "invalid_encrypted_content"):
 		return "thinking_signature_invalid", "invalid_request_error", true

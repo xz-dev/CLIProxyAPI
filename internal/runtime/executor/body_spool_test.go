@@ -213,10 +213,22 @@ func TestCodexWebsocketSendSplices(t *testing.T) {
 }
 
 // TestProvider413SingleAttemptThroughManager: a codex provider 413 on a spooled body is uploaded
-// once, never rotated to the second credential, and relayed as a 413 with the provider's message
-// (the codex executor's existing classification sets code context_too_large).
+// once, never rotated to the second credential, never cools a credential, and is relayed as a 413.
+// A payload-size 413 keeps the provider's body unchanged; only a context-length 413 becomes
+// context_too_large.
 func TestProvider413SingleAttemptThroughManager(t *testing.T) {
-	cause := `{"error":{"type":"request_too_large","message":"Request exceeds the maximum size"}}`
+	for _, tc := range []struct {
+		name, cause, want string
+	}{
+		{"size", `{"error":{"type":"invalid_request_error","code":"request_too_large","message":"Request exceeds the maximum size"}}`, ""},
+		{"size-unknown-code", `{"error":{"type":"request_too_large","message":"Request exceeds the maximum size"}}`, ""},
+		{"context", `{"error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"Request exceeds the maximum context length"}}`, "context_too_large"},
+	} {
+		t.Run(tc.name, func(t *testing.T) { provider413ThroughManager(t, tc.name, tc.cause, tc.want) })
+	}
+}
+
+func provider413ThroughManager(t *testing.T, name, cause, wantCode string) {
 	for _, stream := range []bool{false, true} {
 		var c capture
 		srv := c.server(t, func(w http.ResponseWriter) {
@@ -230,7 +242,7 @@ func TestProvider413SingleAttemptThroughManager(t *testing.T) {
 		reg := registry.GetGlobalRegistry()
 		for i := 0; i < 2; i++ {
 			auth := codexAPIKeyTestAuth(srv.URL)
-			auth.ID = fmt.Sprintf("spool413-%v-%d", stream, i)
+			auth.ID = fmt.Sprintf("spool413-%s-%v-%d", name, stream, i)
 			reg.RegisterClient(auth.ID, "codex", []*registry.ModelInfo{{ID: "m"}})
 			id := auth.ID
 			t.Cleanup(func() { reg.UnregisterClient(id) })
@@ -255,11 +267,23 @@ func TestProvider413SingleAttemptThroughManager(t *testing.T) {
 		} else {
 			_, err = manager.Execute(ctx, []string{"codex"}, req, opts)
 		}
-		if err == nil || !strings.Contains(err.Error(), "Request exceeds the maximum size") || statusFrom(err) != http.StatusRequestEntityTooLarge {
+		if err == nil || !strings.Contains(err.Error(), "Request exceeds the maximum") || statusFrom(err) != http.StatusRequestEntityTooLarge {
 			t.Fatalf("stream=%v: err=%v", stream, err)
 		}
 		if len(c.bodies) != 1 || len(c.bodies[0]) < 600<<10 {
 			t.Fatalf("stream=%v: provider attempts=%d, want exactly 1 full upload", stream, len(c.bodies))
+		}
+		if wantCode == "" && err.Error() != cause {
+			t.Fatalf("stream=%v: body %s, want the provider body unchanged %s", stream, err.Error(), cause)
+		}
+		if wantCode != "" {
+			assertCodexErrorCode(t, err.Error(), "invalid_request_error", wantCode)
+		}
+		for i := 0; i < 2; i++ {
+			auth, ok := manager.GetByID(fmt.Sprintf("spool413-%s-%v-%d", name, stream, i))
+			if !ok || auth.Unavailable || auth.Quota.Exceeded || (auth.ModelStates["m"] != nil && auth.ModelStates["m"].Unavailable) {
+				t.Fatalf("stream=%v: credential %d cooled down after a provider 413", stream, i)
+			}
 		}
 	}
 }

@@ -337,6 +337,27 @@ func TestNewCodexStatusErrPreservesUnclassifiedErrors(t *testing.T) {
 	}
 }
 
+// TestNewCodexStatusErrPreservesPayloadSize413: only a context-length signal relabels a 413; a
+// byte-size or unknown-code provider 413 keeps its status and body unchanged.
+func TestNewCodexStatusErrPreservesPayloadSize413(t *testing.T) {
+	for _, body := range []string{
+		`{"error":{"message":"Request too large: 70000000 bytes exceeds 67108864","type":"invalid_request_error","code":"request_too_large"}}`,
+		`{"error":{"message":"payload rejected","type":"invalid_request_error","code":"some_new_code"}}`,
+		`<html>413 Request Entity Too Large</html>`,
+	} {
+		err := newCodexStatusErr(http.StatusRequestEntityTooLarge, []byte(body))
+		if err.StatusCode() != http.StatusRequestEntityTooLarge || err.Error() != body {
+			t.Fatalf("got %d %s, want 413 with the provider body %s", err.StatusCode(), err.Error(), body)
+		}
+	}
+	ctxBody := `{"error":{"message":"This model's maximum context length is 400000 tokens","type":"invalid_request_error"}}`
+	err := newCodexStatusErr(http.StatusRequestEntityTooLarge, []byte(ctxBody))
+	if err.StatusCode() != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d", err.StatusCode())
+	}
+	assertCodexErrorCode(t, err.Error(), "invalid_request_error", "context_too_large")
+}
+
 func assertCodexErrorCode(t *testing.T, raw string, wantType string, wantCode string) {
 	t.Helper()
 
