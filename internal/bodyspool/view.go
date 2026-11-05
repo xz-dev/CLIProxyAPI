@@ -146,6 +146,5 @@ func SplicedSHA256(encoded []byte) (sum [32]byte, ok bool) {
 	if _, err := io.Copy(h, r); err != nil {
 		return sum, false
 	}
-	copy(sum[:], h.Sum(nil))
-	return sum, true
+	return [32]byte(h.Sum(nil)), true
 }
