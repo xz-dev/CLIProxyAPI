@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool/bodyspooltest"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"golang.org/x/sys/unix"
 )
 
@@ -216,5 +218,32 @@ func TestConcurrentChargeNeverCrossesLimit(t *testing.T) {
 	wg.Wait()
 	if admitted != 25 || refused != 39 || c.Outstanding() != 25*16<<20 {
 		t.Fatalf("admitted=%d refused=%d outstanding=%d", admitted, refused, c.Outstanding())
+	}
+}
+
+// TestNewRuntimeRefusesWithoutMemoryMax: a cgroup dir without a readable memory.max refuses at
+// startup with an explicit error, and a charge never admits silently when it vanishes (m2).
+func TestNewRuntimeRefusesWithoutMemoryMax(t *testing.T) {
+	spool := t.TempDir()
+	_ = os.Chmod(spool, 0o700)
+	cfg := config.BodySpoolConfig{Enabled: true, Dir: spool, DiskReserveBytes: 1}
+	cfg.CgroupDir = t.TempDir() // no memory.max
+	if _, err := NewRuntime(cfg, nil); err == nil || !strings.Contains(err.Error(), "memory.max") {
+		t.Fatalf("missing memory.max: err = %v", err)
+	}
+	_ = os.WriteFile(filepath.Join(cfg.CgroupDir, "memory.max"), []byte("garbage\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(cfg.CgroupDir, "memory.current"), []byte("1\n"), 0o600)
+	if _, err := NewRuntime(cfg, nil); err == nil || !strings.Contains(err.Error(), "memory.max") {
+		t.Fatalf("unparsable memory.max: err = %v", err)
+	}
+	cfg.CgroupDir = bodyspooltest.CgroupDir(t)
+	rt, err := NewRuntime(cfg, nil)
+	if err != nil {
+		t.Fatalf("readable cgroup refused: %v", err)
+	}
+	_ = os.Remove(filepath.Join(cfg.CgroupDir, "memory.max"))
+	var e *Error
+	if err := rt.Charger.Charge(1); !errors.As(err, &e) || e.Code != "insufficient_memory" {
+		t.Fatalf("charge after memory.max vanished: %v", err)
 	}
 }

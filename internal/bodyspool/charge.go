@@ -38,20 +38,32 @@ func readCgroupInt(path string) (int64, bool, error) {
 	return v, true, err
 }
 
+// Check reads memory.max and memory.current once. NewRuntime refuses to start when either is
+// missing or unreadable, so the charge never runs without its cgroup (no soft accounting).
+func (c *Charger) Check() error {
+	for _, name := range []string{"memory.max", "memory.current"} {
+		if _, _, err := readCgroupInt(filepath.Join(c.CgroupDir, name)); err != nil {
+			return fmt.Errorf("body spool: cgroup-dir %q: cannot read %s: %w", c.CgroupDir, name, err)
+		}
+	}
+	return nil
+}
+
 // Charge reserves step bytes if memory.max − memory.current − outstanding ≥ step + 32 MiB, and
 // otherwise refuses with 503 insufficient_memory naming the hop and the bytes. A cgroup without a
-// memory limit (memory.max "max" or no memory controller file) has no cgroup OOM, so it admits.
+// memory limit (memory.max "max") has no cgroup OOM, so it admits. A missing or unreadable
+// memory.max refuses.
 func (c *Charger) Charge(step int64) error {
 	if step <= 0 {
 		return nil
 	}
 	limit, limited, err := readCgroupInt(filepath.Join(c.CgroupDir, "memory.max"))
-	if os.IsNotExist(err) || (err == nil && !limited) {
-		c.outstanding.Add(step)
-		return nil
-	}
 	if err != nil {
 		return c.refuse(step, 0, fmt.Sprintf("cannot read memory.max: %v", err))
+	}
+	if !limited {
+		c.outstanding.Add(step)
+		return nil
 	}
 	current, _, err := readCgroupInt(filepath.Join(c.CgroupDir, "memory.current"))
 	if err != nil {

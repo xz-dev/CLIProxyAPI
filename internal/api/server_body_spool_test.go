@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool/bodyspooltest"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	"golang.org/x/sys/unix"
@@ -30,7 +31,7 @@ func spoolEngine(t *testing.T, ledger string) (*gin.Engine, *spoolSeen) {
 	dir := t.TempDir()
 	_ = os.Chmod(dir, 0o700)
 	cfg := &config.Config{}
-	cfg.BodySpool = config.BodySpoolConfig{Enabled: true, Dir: dir, LedgerDir: ledger, DiskReserveBytes: 1}
+	cfg.BodySpool = config.BodySpoolConfig{Enabled: true, CgroupDir: bodyspooltest.CgroupDir(t), Dir: dir, LedgerDir: ledger, DiskReserveBytes: 1}
 	if err := applyBodySpool(cfg); err != nil {
 		t.Fatal(err)
 	}

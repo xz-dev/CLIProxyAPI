@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/klauspost/compress/zstd"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool/bodyspooltest"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
 
@@ -39,7 +40,7 @@ func readBody(t *testing.T, spool bool, body []byte, encoding string, maxBytes i
 	}
 	dir := t.TempDir()
 	_ = os.Chmod(dir, 0o700)
-	rt, err := bodyspool.NewRuntime(config.BodySpoolConfig{Enabled: true, Dir: dir, DiskReserveBytes: 1}, nil)
+	rt, err := bodyspool.NewRuntime(config.BodySpoolConfig{Enabled: true, CgroupDir: bodyspooltest.CgroupDir(t), Dir: dir, DiskReserveBytes: 1}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

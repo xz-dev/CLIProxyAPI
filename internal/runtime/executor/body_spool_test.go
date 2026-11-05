@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/klauspost/compress/zstd"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool/bodyspooltest"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -46,7 +47,7 @@ func spoolCtx(t *testing.T, body []byte) (context.Context, []byte) {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	rt, err := bodyspool.NewRuntime(config.BodySpoolConfig{Enabled: true, Dir: dir, DiskReserveBytes: 1}, nil)
+	rt, err := bodyspool.NewRuntime(config.BodySpoolConfig{Enabled: true, CgroupDir: bodyspooltest.CgroupDir(t), Dir: dir, DiskReserveBytes: 1}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +358,7 @@ func TestClaudeFirstPartyCeiling(t *testing.T) {
 	src := io.MultiReader(strings.NewReader(head), &repeatReader{n: claudeFirstPartyCeiling}, strings.NewReader(`"}}]}]}`))
 	dir := t.TempDir()
 	_ = os.Chmod(dir, 0o700)
-	rt, err := bodyspool.NewRuntime(config.BodySpoolConfig{Enabled: true, Dir: dir, DiskReserveBytes: 1}, nil)
+	rt, err := bodyspool.NewRuntime(config.BodySpoolConfig{Enabled: true, CgroupDir: bodyspooltest.CgroupDir(t), Dir: dir, DiskReserveBytes: 1}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
