@@ -163,7 +163,8 @@ func TestInlineLimitIsNamed413(t *testing.T) {
 	body := `{"input":"` + strings.Repeat("t", 2<<20) + `","image_url":"` + strings.Repeat("A", 4<<20) + `"}`
 	_, _, err := Ingest(strings.NewReader(body), o)
 	var e *Error
-	if !errors.As(err, &e) || e.Status != 413 || e.Code != "request_too_large" || e.Limit != 1<<20 || !strings.Contains(err.Error(), `"hop":"cpa"`) {
+	if !errors.As(err, &e) || e.Status != 413 || e.Code != "request_too_large" || e.Limit != 1<<20 || !strings.Contains(err.Error(), `"hop":"cpa"`) ||
+		!strings.Contains(err.Error(), `"limit_bytes":1048576`) || strings.Contains(err.Error(), `"limit":`) {
 		t.Fatalf("got %v", err)
 	}
 	// media beyond the limit does not count: 4 MiB spooled, small inline part

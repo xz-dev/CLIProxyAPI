@@ -56,7 +56,8 @@ func TestDiskFloorIs507AndNeverMemory(t *testing.T) {
 	o.Reserve = 1 << 62
 	_, sp, err := Ingest(strings.NewReader(`{"image_url":"`+strings.Repeat("A", 1<<20)+`"}`), o)
 	var e *Error
-	if !errors.As(err, &e) || e.Status != 507 || e.Code != "insufficient_storage" || sp != nil {
+	if !errors.As(err, &e) || e.Status != 507 || e.Code != "insufficient_storage" || sp != nil ||
+		!strings.Contains(err.Error(), `"limit_bytes":4611686018427387904`) || !strings.Contains(err.Error(), `"hop":"cpa"`) {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -182,7 +183,8 @@ func TestChargeRefusesAtMargin(t *testing.T) {
 	}
 	err := c.Charge(64 << 20)
 	var e *Error
-	if !errors.As(err, &e) || e.Status != 503 || e.Code != "insufficient_memory" || e.Hop != "cpa" {
+	if !errors.As(err, &e) || e.Status != 503 || e.Code != "insufficient_memory" || e.Hop != "cpa" ||
+		!strings.Contains(err.Error(), `"limit_bytes":`) || !strings.Contains(err.Error(), `"code":"insufficient_memory","hop":"cpa"`) {
 		t.Fatalf("over margin: %v", err)
 	}
 	c.Release(300 << 20)
