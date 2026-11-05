@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/url"
 	"sort"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/MoeForge/moego/ojson"
 	xxHash64 "github.com/pierrec/xxHash/xxHash64"
 	claudeauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/claude"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -312,6 +314,12 @@ func claudeCCHSigningEnabled(apiKey string, kind claudeCCHUpstreamKind, cliFinge
 // signAnthropicMessagesBody reproduces Claude Code 2.1.220's final-body CCH.
 // It changes only the five CCH digits in the outgoing body.
 func signAnthropicMessagesBody(body []byte) ([]byte, error) {
+	return signAnthropicMessagesBodySpliced(nil, body)
+}
+
+// signAnthropicMessagesBodySpliced signs a body-spool skeleton: the CCH is the hash of the
+// spliced (full) normalized body, streamed from the spool, so it equals the legacy signature.
+func signAnthropicMessagesBodySpliced(sp *bodyspool.Spool, body []byte) ([]byte, error) {
 	cchOffset, ok := claudeBillingCCHDigitsOffset(body)
 	if !ok {
 		return body, nil
@@ -325,7 +333,11 @@ func signAnthropicMessagesBody(body []byte) ([]byte, error) {
 	}
 
 	hasher := xxHash64.New(claudeCCHSeed)
-	if _, err = hasher.Write(normalizedBody); err != nil {
+	spliced, _, err := sp.Reader(normalizedBody)
+	if err != nil {
+		return nil, fmt.Errorf("hash Claude CCH input: %w", err)
+	}
+	if _, err = io.Copy(hasher, spliced); err != nil {
 		return nil, fmt.Errorf("hash Claude CCH input: %w", err)
 	}
 	cch := fmt.Sprintf("%05x", hasher.Sum64()&0xFFFFF)

@@ -16,8 +16,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/klauspost/compress/zstd"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -73,7 +75,16 @@ func RequestLoggingMiddleware(logger logging.RequestLogger) gin.HandlerFunc {
 		}
 		c.Writer = wrapper
 		attachRequestLogSources(c, logger, loggerEnabled && hasMatchedRoute)
-		deferredCapture := attachDeferredRequestBodyCapture(c.Request, logger, requestInfo, false, false)
+		if bodySpoolCovered(c) {
+			// Body spool (D2): the log and error capture take the redacted skeleton only, handed
+			// over by ReadRequestBody; the raw body (with blob bytes) is never teed.
+			c.Set(handlers.BodySpoolLogBodyKey, func(skeleton []byte) { requestInfo.Body = skeleton })
+			captureBody = false
+		}
+		var deferredCapture *deferredRequestBodyCapture
+		if !bodySpoolCovered(c) {
+			deferredCapture = attachDeferredRequestBodyCapture(c.Request, logger, requestInfo, false, false)
+		}
 		if captureBody {
 			c.Set(authenticatedRequestBodyCapturerContextKey, func() {
 				if deferredCapture != nil && deferredCapture.bytesRead == 0 {
@@ -122,6 +133,15 @@ func RequestLoggingMiddleware(logger logging.RequestLogger) gin.HandlerFunc {
 func isAbortHandlerPanic(recovered any) bool {
 	err, ok := recovered.(error)
 	return ok && errors.Is(err, http.ErrAbortHandler)
+}
+
+func bodySpoolCovered(c *gin.Context) bool {
+	v, ok := c.Get(bodyspool.GinKey)
+	if !ok {
+		return false
+	}
+	sr, _ := v.(*bodyspool.Request)
+	return sr != nil && sr.Covered
 }
 
 type fileBodySourceFactory interface {

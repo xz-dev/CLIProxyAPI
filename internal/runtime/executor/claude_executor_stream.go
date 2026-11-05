@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/MoeForge/moego/ojson"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
@@ -257,7 +258,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	body = bodyForUpstream
 	bodyForTranslation := bodyForUpstream
 	if cchSigning {
-		bodyForUpstream, err = signAnthropicMessagesBody(bodyForUpstream)
+		bodyForUpstream, err = signAnthropicMessagesBodySpliced(bodyspool.SpoolFrom(ctx), bodyForUpstream)
 		if err != nil {
 			return nil, fmt.Errorf("sign Claude CCH: %w", err)
 		}
@@ -267,7 +268,10 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		return nil, errMidSystem
 	}
 	reporter.SetTranslatedReasoningEffort(bodyForUpstream, to.String())
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyForUpstream))
+	if errCeiling := claudeProviderCeiling(ctx, baseURL, bodyForUpstream); errCeiling != nil {
+		return nil, errCeiling
+	}
+	httpReq, err := bodyspool.NewHTTPRequest(ctx, http.MethodPost, url, bodyForUpstream)
 	if err != nil {
 		return nil, err
 	}

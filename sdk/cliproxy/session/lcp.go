@@ -13,6 +13,7 @@ import (
 	"github.com/MoeForge/moego/json"
 	"github.com/MoeForge/moego/ojson"
 	"github.com/MoeForge/moego/regexp"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 )
@@ -412,6 +413,11 @@ func canonicalResourcePart(value ojson.Result) CanonicalPart {
 func canonicalJSONPart(kind string, value ojson.Result) CanonicalPart {
 	raw := value.Raw
 	clonedKind := strings.Clone(kind)
+	// Body spool: a part holding a spool marker is fingerprinted over its spliced bytes, so the
+	// fingerprint equals the one of the original body.
+	if d, ok := bodyspool.SplicedPartDigest(raw, sparseFingerprintBytes); ok && d.Size > largePartThreshold {
+		return CanonicalPart{Kind: clonedKind, Value: d.Sample, Digest: d.Digest, OriginalSize: d.Size, Sampled: true}
+	}
 	if len(raw) > largePartThreshold {
 		return CanonicalPart{
 			Kind:         clonedKind,

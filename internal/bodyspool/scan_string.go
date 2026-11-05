@@ -85,8 +85,27 @@ func (s *scanner) str(top int) error {
 	}
 }
 
+// canonicalByte reports whether b encodes as itself under every JSON encoder the hop uses
+// (gjson/sjson raw, encoding/json with HTML escaping, serde): printable ASCII except '"', '\\',
+// '<', '>' and '&'. Only canonical strings stay spooled, so a translator that decodes and
+// re-encodes a media value produces the same bytes from the marker as from the original.
+func canonicalByte(b byte) bool {
+	return b >= 0x20 && b < 0x7f && b != '"' && b != '\\' && b != '<' && b != '>' && b != '&'
+}
+
+func canonical(p []byte) bool {
+	for _, b := range p {
+		if !canonicalByte(b) {
+			return false
+		}
+	}
+	return true
+}
+
 // spill keeps a short inline data: URL header, writes a marker, and streams the rest of the string
-// value to the spool. It is only called outside a backslash escape.
+// value to the spool. A value that turns out non-canonical (escapes, non-ASCII, HTML characters)
+// or truncated is copied back inline, where it counts against the inline-bytes limit. It is only
+// called outside a backslash escape.
 func (s *scanner) spill(buf []byte) error {
 	keep := 0
 	if bytes.HasPrefix(buf, dataPrefix) {
@@ -108,16 +127,15 @@ func (s *scanner) spill(buf []byte) error {
 		s.sp = sp
 	}
 	blob := s.sp.begin()
-	var v validator
-	v.feed(buf[keep:])
+	canon := canonical(buf[keep:])
 	if err := blob.write(buf[keep:]); err != nil {
 		return err
 	}
-	esc, closed := false, false
+	closed, esc := false, false
 	for {
 		b, err := s.in.ReadByte()
 		if err == io.EOF {
-			break // truncated: the marker still splices back to exactly the input bytes
+			break
 		}
 		if err != nil {
 			return err
@@ -128,16 +146,23 @@ func (s *scanner) spill(buf []byte) error {
 			break
 		}
 		esc = !esc && b == '\\'
-		v.feedByte(b)
+		canon = canon && canonicalByte(b)
 		if err := blob.writeByte(b); err != nil {
 			return err
 		}
 	}
-	idx, err := blob.end(v.ok())
+	seg, err := blob.end()
 	if err != nil {
 		return err
 	}
-	if err := s.emitBytes(s.sp.marker(idx)); err != nil {
+	if canon && closed {
+		s.sp.blobs = append(s.sp.blobs, seg)
+		if err := s.emitBytes(s.sp.marker(len(s.sp.blobs) - 1)); err != nil {
+			return err
+		}
+		return s.emit('"')
+	}
+	if err := s.inline(seg); err != nil { // the spooled bytes stay as dead space in the anonymous file
 		return err
 	}
 	if closed {
@@ -146,43 +171,22 @@ func (s *scanner) spill(buf []byte) error {
 	return nil
 }
 
-// validator applies encoding/json string rules to spooled bytes, so the spool can report whether
-// the full body would pass json.Valid (no raw control bytes, only valid escapes).
-type validator struct {
-	state int // 0 plain, 1 after '\', 2..5 expecting hex digits of \u
-	bad   bool
-}
-
-func (v *validator) feed(p []byte) {
-	for _, b := range p {
-		v.feedByte(b)
+// inline copies a spooled segment back into the skeleton.
+func (s *scanner) inline(seg segment) error {
+	r := &blobReader{s: s.sp, off: seg.off, end: seg.off + seg.n, dropped: seg.off}
+	chunk := make([]byte, 64<<10)
+	for {
+		n, err := r.Read(chunk)
+		if n > 0 {
+			if errEmit := s.emitBytes(chunk[:n]); errEmit != nil {
+				return errEmit
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
 	}
 }
-
-func (v *validator) feedByte(b byte) {
-	switch {
-	case v.state == 1:
-		switch b {
-		case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
-			v.state = 0
-		case 'u':
-			v.state = 2
-		default:
-			v.bad, v.state = true, 0
-		}
-	case v.state >= 2:
-		if !(b >= '0' && b <= '9' || b >= 'a' && b <= 'f' || b >= 'A' && b <= 'F') {
-			v.bad = true
-		}
-		v.state++
-		if v.state == 6 {
-			v.state = 0
-		}
-	case b == '\\':
-		v.state = 1
-	case b < 0x20:
-		v.bad = true
-	}
-}
-
-func (v *validator) ok() bool { return !v.bad && v.state == 0 }

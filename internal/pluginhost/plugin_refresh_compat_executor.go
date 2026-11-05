@@ -172,3 +172,9 @@ func (e *pluginRefreshCompatExecutor) SupportsApplyPatch() bool {
 	support, okSupport := e.inner.(coreauth.ApplyPatchSupport)
 	return okSupport && support.SupportsApplyPatch()
 }
+
+// SplicesBodySpool delegates to the wrapped native executor, which performs the upstream send.
+func (e pluginRefreshCompatExecutor) SplicesBodySpool() bool {
+	s, ok := e.inner.(interface{ SplicesBodySpool() bool })
+	return ok && s.SplicesBodySpool()
+}

@@ -201,6 +201,9 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	engine.Use(logging.GinLogrusLogger())
 	engine.Use(logging.CPATraceIDMiddleware())
 	engine.Use(s.maxRequestBodyBytesMiddleware())
+	// Body spool runs before request logging so the logger sees the spool state (D2)
+	// and the capacity ticket header is already consumed.
+	engine.Use(s.bodySpoolMiddleware())
 
 	// Add request logging middleware before recovery and extra middleware so that
 	// any panic response written by GinLogrusRecovery or custom extraMiddleware is
@@ -337,6 +340,10 @@ func (s *Server) Start() error {
 	}
 
 	cfg := s.getConfig()
+	if errSpool := applyBodySpool(cfg); errSpool != nil {
+		_ = listener.Close()
+		return fmt.Errorf("failed to start HTTP server: body spool: %w", errSpool)
+	}
 	useTLS := cfg != nil && cfg.TLS.Enable
 	if useTLS {
 		certPath := strings.TrimSpace(cfg.TLS.Cert)

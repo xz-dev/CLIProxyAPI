@@ -403,6 +403,20 @@ func (h *Host) InterceptStreamChunkExcept(ctx context.Context, req pluginapi.Str
 	return current
 }
 
+// HasResponseInterceptors reports whether an active plugin receives non-stream responses
+// (and with them the request body).
+func (h *Host) HasResponseInterceptors() bool {
+	if h == nil {
+		return false
+	}
+	for _, record := range h.activeRecords() {
+		if !h.isPluginFused(record.id) && record.plugin.Capabilities.ResponseInterceptor != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Host) HasStreamInterceptors() bool {
 	if h == nil {
 		return false

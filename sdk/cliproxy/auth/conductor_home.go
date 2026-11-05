@@ -1474,6 +1474,10 @@ func shouldAttemptAntigravityCreditsFallback(m *Manager, lastErr error, provider
 
 func (m *Manager) tryAntigravityCreditsExecute(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, bool, error) {
 	updateInFlightScopeProvider(ctx, "antigravity")
+	req, opts, errSpool := guardBodySpool(ctx, nil, "antigravity", req, opts, false)
+	if errSpool != nil {
+		return cliproxyexecutor.Response{}, true, errSpool
+	}
 	if m != nil && m.HomeEnabled() {
 		return cliproxyexecutor.Response{}, false, &Error{Code: "home_fallback_unsupported", Message: "Home does not support Antigravity credits fallback", HTTPStatus: http.StatusServiceUnavailable}
 	}
@@ -1543,6 +1547,10 @@ func (m *Manager) tryAntigravityCreditsExecute(ctx context.Context, req cliproxy
 
 func (m *Manager) tryAntigravityCreditsExecuteStream(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, bool, error) {
 	updateInFlightScopeProvider(ctx, "antigravity")
+	req, opts, errSpool := guardBodySpool(ctx, nil, "antigravity", req, opts, false)
+	if errSpool != nil {
+		return nil, true, errSpool
+	}
 	if m != nil && m.HomeEnabled() {
 		return nil, false, &Error{Code: "home_fallback_unsupported", Message: "Home does not support Antigravity credits fallback", HTTPStatus: http.StatusServiceUnavailable}
 	}

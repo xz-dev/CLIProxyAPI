@@ -1,0 +1,271 @@
+package executor
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/gorilla/websocket"
+	"github.com/klauspost/compress/zstd"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
+)
+
+func spoolDataURL(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(b)
+}
+
+func spoolResponsesBody() []byte {
+	a := spoolDataURL(300 << 10)
+	return []byte(fmt.Sprintf(`{"model":"m","stream":true,"input":[{"type":"message","role":"user","content":[`+
+		`{"type":"input_text","text":"look \u00e9"},{"type":"input_image","image_url":%q}]},`+
+		`{"type":"message","role":"user","content":[{"type":"input_image","image_url":%q}]}]}`, a, a))
+}
+
+// spoolCtx ingests body and returns a context carrying the spool request plus the skeleton.
+func spoolCtx(t *testing.T, body []byte) (context.Context, []byte) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := bodyspool.NewRuntime(config.BodySpoolConfig{Enabled: true, Dir: dir, DiskReserveBytes: 1}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, sp, err := bodyspool.Ingest(bytes.NewReader(body), bodyspool.Options{Dir: rt.Cfg.Dir, Threshold: rt.Cfg.ThresholdBytes, Reserve: 1, Hop: "cpa"})
+	if err != nil || sp.Blobs() == 0 {
+		t.Fatalf("ingest: %v blobs=%d", err, sp.Blobs())
+	}
+	sr := rt.NewRequest("", true)
+	sr.SetSpool(sp)
+	t.Cleanup(sr.Close)
+	return bodyspool.WithRequest(t.Context(), sr), sk
+}
+
+type capture struct {
+	mu     sync.Mutex
+	bodies [][]byte
+	lens   []int64
+}
+
+func (c *capture) server(t *testing.T, reply func(w http.ResponseWriter)) *httptest.Server {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		c.mu.Lock()
+		c.bodies, c.lens = append(c.bodies, b), append(c.lens, r.ContentLength)
+		c.mu.Unlock()
+		reply(w)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestSendPointsSpliceIdenticalBytes: legacy(body) and splice(skeleton) reach the upstream with
+// identical bytes and Content-Length at the codex, claude and openai-compat send points.
+func TestSendPointsSpliceIdenticalBytes(t *testing.T) {
+	body := spoolResponsesBody()
+	cases := map[string]struct {
+		exec  cliproxyauth.ProviderExecutor
+		auth  func(url string) *cliproxyauth.Auth
+		reply func(w http.ResponseWriter)
+	}{
+		"codex": {NewCodexExecutor(&config.Config{}), codexAPIKeyTestAuth, func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"object\":\"response\",\"status\":\"completed\",\"model\":\"m\",\"output\":[]}}\n\n")
+		}},
+		"claude": {NewClaudeExecutor(&config.Config{}), func(url string) *cliproxyauth.Auth {
+			return &cliproxyauth.Auth{Provider: "claude", Attributes: map[string]string{"api_key": "sk-test", "base_url": url}}
+		}, func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"msg","type":"message","role":"assistant","content":[{"type":"text","text":"OK"}],"model":"m","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+		}},
+		"openai-compat": {NewOpenAICompatExecutor("openai-compatibility", &config.Config{}), func(url string) *cliproxyauth.Auth {
+			return &cliproxyauth.Auth{Provider: "openai-compatibility", Attributes: map[string]string{"base_url": url + "/v1", "api_key": "k"}}
+		}, func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"x","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}`)
+		}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var c capture
+			srv := c.server(t, tc.reply)
+			opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, OriginalRequest: body}
+			_, _ = tc.exec.Execute(t.Context(), tc.auth(srv.URL), cliproxyexecutor.Request{Model: "m", Payload: body}, opts)
+			ctx, sk := spoolCtx(t, body)
+			opts.OriginalRequest = sk
+			_, _ = tc.exec.Execute(ctx, tc.auth(srv.URL), cliproxyexecutor.Request{Model: "m", Payload: sk}, opts)
+			if len(c.bodies) != 2 {
+				t.Fatalf("upstream saw %d requests", len(c.bodies))
+			}
+			if !bytes.Equal(c.bodies[0], c.bodies[1]) || c.lens[0] != c.lens[1] || c.lens[1] != int64(len(c.bodies[1])) {
+				t.Fatalf("legacy %d bytes (CL %d) vs spliced %d bytes (CL %d)", len(c.bodies[0]), c.lens[0], len(c.bodies[1]), c.lens[1])
+			}
+			if bytes.Contains(c.bodies[1], []byte(bodyspool.MarkerPrefix)) || len(c.bodies[1]) < 600<<10 {
+				t.Fatalf("marker leaked or blob missing (%d bytes)", len(c.bodies[1]))
+			}
+		})
+	}
+}
+
+// TestCodexCompressionRunsOverSplice: codex zstd compression compresses the spliced body into
+// the spool; the decoded wire body equals the legacy upstream body.
+func TestCodexCompressionRunsOverSplice(t *testing.T) {
+	executor := NewCodexExecutor(codexCompressionConfig())
+	target := "https://chatgpt.com/backend-api/codex/responses"
+	body := spoolResponsesBody()
+	_, legacy, err := executor.cacheHelper(t.Context(), sdktranslator.FormatOpenAIResponse, target, cliproxyexecutor.Request{Payload: body}, body, codexCompressionAuth())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, sk := spoolCtx(t, body)
+	req, upstreamSk, err := executor.cacheHelper(ctx, sdktranslator.FormatOpenAIResponse, target, cliproxyexecutor.Request{Payload: sk}, sk, codexCompressionAuth())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, _ := io.ReadAll(req.Body)
+	if req.Header.Get("Content-Encoding") != "zstd" || req.ContentLength != int64(len(wire)) {
+		t.Fatalf("Content-Encoding=%q CL=%d wire=%d", req.Header.Get("Content-Encoding"), req.ContentLength, len(wire))
+	}
+	dec, _ := zstd.NewReader(nil)
+	defer dec.Close()
+	decoded, err := dec.DecodeAll(wire, nil)
+	if err != nil || !bytes.Equal(decoded, legacy) {
+		t.Fatalf("decoded spliced compression differs from legacy body: %v (%d vs %d)", err, len(decoded), len(legacy))
+	}
+	if again, _ := req.GetBody(); again == nil {
+		t.Fatal("no replayable body")
+	} else if b, _ := io.ReadAll(again); !bytes.Equal(b, wire) {
+		t.Fatal("replayed compressed body differs")
+	}
+	if bytes.Contains(upstreamSk, []byte(bodyspool.MarkerPrefix)) != true {
+		t.Fatal("returned upstream body should stay the skeleton (logged redacted)")
+	}
+}
+
+// TestCCHSigningHashesSplice: the CCH of a skeleton equals the CCH of the full body.
+func TestCCHSigningHashesSplice(t *testing.T) {
+	body := []byte(`{"model":"claude-x","system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.220.abc; cc_entrypoint=cli; cch=00000;"}],` +
+		`"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` +
+		strings.Repeat("QUJD", 40<<10) + `"}},{"type":"text","text":"hi"}]}]}`)
+	want, err := signAnthropicMessagesBody(body)
+	if err != nil || bytes.Equal(want, body) {
+		t.Fatalf("legacy signing did not sign: %v", err)
+	}
+	ctx, sk := spoolCtx(t, body)
+	sp := bodyspool.SpoolFrom(ctx)
+	signed, err := signAnthropicMessagesBodySpliced(sp, sk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := sp.Materialize(signed, 0, "test")
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("spliced CCH differs from legacy: %v", err)
+	}
+}
+
+// TestCodexWebsocketSendSplices: the codex WS turn frame carries the spliced body.
+func TestCodexWebsocketSendSplices(t *testing.T) {
+	body := spoolResponsesBody()
+	got := make(chan []byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		conn.SetReadLimit(64 << 20)
+		_, msg, _ := conn.ReadMessage()
+		got <- msg
+	}))
+	t.Cleanup(srv.Close)
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ctx, sk := spoolCtx(t, body)
+	if err := writeCodexWebsocketMessageCtx(ctx, &codexWebsocketSession{}, conn, sk); err != nil {
+		t.Fatal(err)
+	}
+	if msg := <-got; !bytes.Equal(msg, body) {
+		t.Fatalf("ws frame %d bytes, want %d identical bytes", len(msg), len(body))
+	}
+}
+
+// TestProvider413SingleAttemptThroughManager: a codex provider 413 on a spooled body is uploaded
+// once, never rotated to the second credential, and relayed as a 413 with the provider's message
+// (the codex executor's existing classification sets code context_too_large).
+func TestProvider413SingleAttemptThroughManager(t *testing.T) {
+	cause := `{"error":{"type":"request_too_large","message":"Request exceeds the maximum size"}}`
+	for _, stream := range []bool{false, true} {
+		var c capture
+		srv := c.server(t, func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			_, _ = io.WriteString(w, cause)
+		})
+		manager := cliproxyauth.NewManager(nil, nil, nil)
+		manager.SetRetryConfig(3, 0, 3)
+		manager.RegisterExecutor(NewCodexExecutor(&config.Config{}))
+		reg := registry.GetGlobalRegistry()
+		for i := 0; i < 2; i++ {
+			auth := codexAPIKeyTestAuth(srv.URL)
+			auth.ID = fmt.Sprintf("spool413-%v-%d", stream, i)
+			reg.RegisterClient(auth.ID, "codex", []*registry.ModelInfo{{ID: "m"}})
+			id := auth.ID
+			t.Cleanup(func() { reg.UnregisterClient(id) })
+			if _, err := manager.Register(context.Background(), auth); err != nil {
+				t.Fatal(err)
+			}
+		}
+		body := spoolResponsesBody()
+		ctx, sk := spoolCtx(t, body)
+		req := cliproxyexecutor.Request{Model: "m", Payload: sk}
+		opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, OriginalRequest: sk, Stream: stream}
+		var err error
+		if stream {
+			var res *cliproxyexecutor.StreamResult
+			if res, err = manager.ExecuteStream(ctx, []string{"codex"}, req, opts); err == nil {
+				for chunk := range res.Chunks {
+					if chunk.Err != nil {
+						err = chunk.Err
+					}
+				}
+			}
+		} else {
+			_, err = manager.Execute(ctx, []string{"codex"}, req, opts)
+		}
+		if err == nil || !strings.Contains(err.Error(), "Request exceeds the maximum size") || statusFrom(err) != http.StatusRequestEntityTooLarge {
+			t.Fatalf("stream=%v: err=%v", stream, err)
+		}
+		if len(c.bodies) != 1 || len(c.bodies[0]) < 600<<10 {
+			t.Fatalf("stream=%v: provider attempts=%d, want exactly 1 full upload", stream, len(c.bodies))
+		}
+	}
+}
+
+func statusFrom(err error) int {
+	var sc interface{ StatusCode() int }
+	if errors.As(err, &sc) {
+		return sc.StatusCode()
+	}
+	return 0
+}
