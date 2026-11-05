@@ -23,6 +23,7 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
+	"golang.org/x/net/http2"
 )
 
 func spoolDataURL(n int) string {
@@ -268,4 +269,116 @@ func statusFrom(err error) int {
 		return sc.StatusCode()
 	}
 	return 0
+}
+
+type resetOnceTransport struct {
+	mu     sync.Mutex
+	bodies [][]byte
+}
+
+// RoundTrip reads part of the first upload and fails it with a pre-header HTTP/2 PROTOCOL_ERROR,
+// then answers every later attempt (each attempt re-reads the spool).
+func (rt *resetOnceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	rt.mu.Lock()
+	first := len(rt.bodies) == 0
+	rt.mu.Unlock()
+	if first {
+		_, _ = io.CopyN(io.Discard, req.Body, 4096)
+		rt.mu.Lock()
+		rt.bodies = append(rt.bodies, nil)
+		rt.mu.Unlock()
+		return nil, http2.StreamError{StreamID: 1, Code: http2.ErrCodeProtocol, Cause: errors.New("received from peer")}
+	}
+	b, _ := io.ReadAll(req.Body)
+	rt.mu.Lock()
+	rt.bodies = append(rt.bodies, b)
+	rt.mu.Unlock()
+	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Request: req,
+		Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"object\":\"response\",\"status\":\"completed\",\"model\":\"m\",\"output\":[]}}\n\n"))}, nil
+}
+
+type fixedRT struct{ rt http.RoundTripper }
+
+func (f fixedRT) RoundTripperFor(*cliproxyauth.Auth) http.RoundTripper { return f.rt }
+
+// TestH2ResetRetryReSplicesSpool: a pre-header H2 reset is retried within the request-retry budget,
+// the retry re-reads the spool, and the delivered body equals the legacy body.
+func TestH2ResetRetryReSplicesSpool(t *testing.T) {
+	body := spoolResponsesBody()
+	run := func(ctx context.Context, payload []byte, id string) *resetOnceTransport {
+		rt := &resetOnceTransport{}
+		manager := cliproxyauth.NewManager(nil, nil, nil)
+		manager.SetRetryConfig(1, 0, 0)
+		manager.SetRoundTripperProvider(fixedRT{rt})
+		manager.RegisterExecutor(NewCodexExecutor(&config.Config{}))
+		auth := codexAPIKeyTestAuth("https://upstream.invalid")
+		auth.ID = id
+		reg := registry.GetGlobalRegistry()
+		reg.RegisterClient(auth.ID, "codex", []*registry.ModelInfo{{ID: "m"}})
+		t.Cleanup(func() { reg.UnregisterClient(id) })
+		if _, err := manager.Register(context.Background(), auth); err != nil {
+			t.Fatal(err)
+		}
+		opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, OriginalRequest: payload}
+		if _, err := manager.Execute(ctx, []string{"codex"}, cliproxyexecutor.Request{Model: "m", Payload: payload}, opts); err != nil {
+			t.Fatal(err)
+		}
+		return rt
+	}
+	legacy := run(context.Background(), body, "h2-legacy")
+	ctx, sk := spoolCtx(t, body)
+	spooled := run(ctx, sk, "h2-spooled")
+	if len(spooled.bodies) != 2 || len(legacy.bodies) != 2 || !bytes.Equal(spooled.bodies[1], legacy.bodies[1]) || len(spooled.bodies[1]) < 600<<10 {
+		t.Fatalf("attempts spooled=%d legacy=%d; retried bodies differ", len(spooled.bodies), len(legacy.bodies))
+	}
+}
+
+type repeatReader struct{ n int64 }
+
+func (r *repeatReader) Read(p []byte) (int, error) {
+	if r.n <= 0 {
+		return 0, io.EOF
+	}
+	k := int(min(int64(len(p)), r.n))
+	for i := range p[:k] {
+		p[i] = 'A'
+	}
+	r.n -= int64(k)
+	return k, nil
+}
+
+// TestClaudeFirstPartyCeiling: a body above Anthropic's 128,000,000-byte ceiling gets the named
+// 413 (limit and route) and nothing is sent; other claude routes keep the 256 MiB cap.
+func TestClaudeFirstPartyCeiling(t *testing.T) {
+	if testing.Short() {
+		t.Skip("writes a 128 MB spool")
+	}
+	head := `{"model":"claude-x","max_tokens":8,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"`
+	src := io.MultiReader(strings.NewReader(head), &repeatReader{n: claudeFirstPartyCeiling}, strings.NewReader(`"}}]}]}`))
+	dir := t.TempDir()
+	_ = os.Chmod(dir, 0o700)
+	rt, err := bodyspool.NewRuntime(config.BodySpoolConfig{Enabled: true, Dir: dir, DiskReserveBytes: 1}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, sp, err := bodyspool.Ingest(src, bodyspool.Options{Dir: dir, Threshold: 64 << 10, Reserve: 1, Hop: "cpa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sr := rt.NewRequest("", true)
+	sr.SetSpool(sp)
+	defer sr.Close()
+	ctx := bodyspool.WithRequest(t.Context(), sr)
+	var e *bodyspool.Error
+	if err := claudeProviderCeiling(ctx, "https://api.anthropic.com", sk); !errors.As(err, &e) || e.Status != 413 || e.Limit != claudeFirstPartyCeiling || !strings.Contains(e.Message, "Anthropic first-party") {
+		t.Fatalf("first-party: %v", err)
+	}
+	if err := claudeProviderCeiling(ctx, "https://claude-relay.example", sk); err != nil {
+		t.Fatalf("other claude route must keep the cap: %v", err)
+	}
+	auth := &cliproxyauth.Auth{Provider: "claude", Attributes: map[string]string{"api_key": "sk-test", "base_url": "https://api.anthropic.com"}}
+	_, err = NewClaudeExecutor(&config.Config{}).Execute(ctx, auth, cliproxyexecutor.Request{Model: "claude-x", Payload: sk}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude, OriginalRequest: sk})
+	if !errors.As(err, &e) || e.Status != 413 {
+		t.Fatalf("executor did not refuse before sending: %v", err)
+	}
 }
