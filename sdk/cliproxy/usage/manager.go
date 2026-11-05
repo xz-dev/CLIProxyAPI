@@ -777,7 +777,14 @@ func (m *Manager) run(ctx context.Context) {
 			return
 		}
 		item := m.queue[0]
+		// Clear the slot: a popped item's context carries the request's *gin.Context and
+		// executor values (copies of the request body), and the backing array stays reachable
+		// through m.queue (a zero-capacity reslice keeps its base pointer).
+		m.queue[0] = queueItem{}
 		m.queue = m.queue[1:]
+		if len(m.queue) == 0 {
+			m.queue = nil
+		}
 		m.mu.Unlock()
 		m.dispatch(item)
 	}
