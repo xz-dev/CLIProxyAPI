@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"runtime/debug"
 	"sync"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -39,7 +40,7 @@ func NewRuntime(cfg config.BodySpoolConfig, prev *Runtime) (*Runtime, error) {
 	if err := CheckDir(eff.Dir); err != nil {
 		return nil, err
 	}
-	ch := &Charger{CgroupDir: eff.CgroupDir, Hop: Hop}
+	ch := &Charger{CgroupDir: eff.CgroupDir, Hop: Hop, ReleaseReclaim: debug.FreeOSMemory}
 	if err := ch.Check(); err != nil {
 		return nil, err
 	}
@@ -64,6 +65,7 @@ type Request struct {
 	spool    *Spool
 	account  *Account
 	fallback int64 // k_path × N already charged for fallback copies of this request
+	released int64 // bytes the first Close released
 }
 
 // NewRequest starts the state of one request.
@@ -106,12 +108,26 @@ func (r *Request) Close() {
 		return
 	}
 	r.CloseSpool()
-	r.account.Release()
+	n := r.account.Release()
 	r.mu.Lock()
+	if n > 0 {
+		r.released = n
+	}
 	l := r.lease
 	r.lease = nil
 	r.mu.Unlock()
 	l.Release()
+}
+
+// ReleasedBytes returns the memory charge Close released (0 before Close). The outermost
+// middleware compares it with ReclaimAfterRelease.
+func (r *Request) ReleasedBytes() int64 {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.released
 }
 
 // Fallback returns the full body for a path that is not converted (D2): skel itself when it

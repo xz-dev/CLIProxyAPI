@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -84,6 +85,37 @@ func (s *Server) bodySpoolMiddleware() gin.HandlerFunc {
 			c.Request.Body = &fallbackBody{ReadCloser: c.Request.Body, sr: sr, path: path, limit: limit}
 		}
 		c.Next()
+	}
+}
+
+// releaseLargeRequestState must be the outermost middleware. gin keeps a finished request's
+// Context in a sync.Pool until another request reuses it, so its Keys (the request-log bodies and
+// upstream request copies, the spool state), its Request (the request context with the executor
+// values) and its Writer chain stay reachable through one more GC after the request. After a
+// request whose released charge was at least bodyspool.ReclaimAfterRelease, once every other
+// middleware has returned, it drops those references and returns the freed heap to the OS
+// (Charger.ReclaimReleased). Smaller requests are left as they are.
+func releaseLargeRequestState() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		w := c.Writer // &c.writermem: inner middlewares wrap it
+		c.Next()
+		v, _ := c.Get(bodyspool.GinKey)
+		sr, _ := v.(*bodyspool.Request)
+		if sr == nil || sr.ReleasedBytes() < bodyspool.ReclaimAfterRelease {
+			return
+		}
+		if c.Request != nil {
+			r := c.Request.WithContext(context.Background())
+			r.Body, r.GetBody = http.NoBody, nil
+			c.Request = r
+		}
+		// gin itself clears Keys without a lock when it reuses the Context, so nothing may read
+		// them after the handler chain has returned.
+		c.Keys = nil
+		c.Writer = w
+		if sr.RT != nil {
+			sr.RT.Charger.ReclaimReleased()
+		}
 	}
 }
 
