@@ -3,6 +3,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"errors"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -47,4 +48,12 @@ func guardBodySpool(ctx context.Context, executor ProviderExecutor, provider str
 	}
 	req.Payload, opts.OriginalRequest = payload, original
 	return req, opts, nil
+}
+
+// isBodySpoolError reports a local body-spool refusal (507 insufficient_storage, 503
+// insufficient_memory, 500 marker_unresolved, 413 limits). It belongs to the request, not to the
+// credential: the conductor stops without MarkResult, cooldown or credential rotation.
+func isBodySpoolError(err error) bool {
+	var e *bodyspool.Error
+	return errors.As(err, &e)
 }
