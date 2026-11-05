@@ -87,13 +87,21 @@ func writeWebsocketPayloadMessage(provider string, sess *codexWebsocketSession, 
 	return errSend
 }
 
+// writeCodexWebsocketMessage writes payload as is; it refuses a payload that still carries a live
+// spool marker (writeCodexWebsocketMessageCtx splices).
 func writeCodexWebsocketMessage(sess *codexWebsocketSession, conn *websocket.Conn, payload []byte) error {
+	if err := bodyspool.CheckSendable(context.Background(), payload); err != nil {
+		return err
+	}
 	return writeWebsocketPayloadMessage("codex", sess, conn, payload)
 }
 
 // writeCodexWebsocketMessageCtx writes a turn frame; a body-spool skeleton is spliced into the
 // frame through NextWriter so the full body is never assembled in memory (D2).
 func writeCodexWebsocketMessageCtx(ctx context.Context, sess *codexWebsocketSession, conn *websocket.Conn, payload []byte) error {
+	if err := bodyspool.CheckSendable(ctx, payload); err != nil {
+		return err
+	}
 	sp := bodyspool.SpoolFrom(ctx)
 	if !sp.Has(payload) {
 		return writeCodexWebsocketMessage(sess, conn, payload)
