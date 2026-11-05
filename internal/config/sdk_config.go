@@ -22,6 +22,10 @@ type SDKConfig struct {
 	// Values <= 0 disable the limit (default).
 	MaxRequestBodyBytes int64 `yaml:"max-request-body-bytes" json:"max-request-body-bytes"`
 
+	// BodySpool configures the skeleton + blob request-body spool (YAML: server.body-spool).
+	// Disabled by default; see BodySpoolConfig.
+	BodySpool BodySpoolConfig `yaml:"body-spool" json:"body-spool"`
+
 	// ResponseCompression controls negotiated compression of downstream HTTP responses.
 	// It is configured under server.response-compression. Config.ServerResponseCompression
 	// mirrors it for JSON and programmatic access; read the effective value via
