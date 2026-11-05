@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool/bodyspooltest"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
@@ -28,7 +29,7 @@ func TestRequestLogTakesSkeletonOnly(t *testing.T) {
 	for _, full := range []bool{true, false} {
 		spoolDir, logsDir := t.TempDir(), t.TempDir()
 		_ = os.Chmod(spoolDir, 0o700)
-		rt, err := bodyspool.NewRuntime(config.BodySpoolConfig{Enabled: true, Dir: spoolDir, DiskReserveBytes: 1}, nil)
+		rt, err := bodyspool.NewRuntime(config.BodySpoolConfig{Enabled: true, CgroupDir: bodyspooltest.CgroupDir(t), Dir: spoolDir, DiskReserveBytes: 1}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

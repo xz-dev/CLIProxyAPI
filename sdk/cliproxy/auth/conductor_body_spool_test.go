@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool/bodyspooltest"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -18,7 +19,7 @@ func spoolRequestCtx(t *testing.T, body string, fallback int64) (context.Context
 	t.Helper()
 	dir := t.TempDir()
 	_ = os.Chmod(dir, 0o700)
-	rt, err := bodyspool.NewRuntime(internalconfig.BodySpoolConfig{Enabled: true, Dir: dir, DiskReserveBytes: 1, FallbackLimitBytes: fallback}, nil)
+	rt, err := bodyspool.NewRuntime(internalconfig.BodySpoolConfig{Enabled: true, CgroupDir: bodyspooltest.CgroupDir(t), Dir: dir, DiskReserveBytes: 1, FallbackLimitBytes: fallback}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
