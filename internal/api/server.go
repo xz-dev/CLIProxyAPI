@@ -170,6 +170,9 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	}
 
 	// Add middleware
+	// Outermost: drops a finished large request's references held by gin's pooled Context,
+	// then returns the freed heap (releaseLargeRequestState).
+	engine.Use(releaseLargeRequestState())
 	engine.Use(logging.GinLogrusLogger())
 	engine.Use(logging.GinLogrusRecovery())
 	engine.Use(logging.CPATraceIDMiddleware())
