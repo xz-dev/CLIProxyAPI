@@ -24,7 +24,7 @@ type errorDetail struct {
 	Type    string `json:"type"`
 	Code    string `json:"code"`
 	Hop     string `json:"hop"`
-	Limit   int64  `json:"limit,omitempty"`
+	Limit   int64  `json:"limit_bytes,omitempty"`
 }
 
 func (e *Error) Error() string {
