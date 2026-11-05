@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 
@@ -58,7 +59,7 @@ func readSpooledRequestBody(c *gin.Context, sr *bodyspool.Request) ([]byte, erro
 	if c.Request.Body != nil {
 		body = c.Request.Body
 	}
-	body, closeDecoder, err := spoolDecodedBody(body, c.Request.Header.Get("Content-Encoding"))
+	body, closeDecoder, err := spoolDecodedBody(body, c.Request.Header.Get("Content-Encoding"), c.GetInt64(MaxRequestBodyBytesContextKey))
 	if err != nil {
 		return nil, err
 	}
@@ -80,26 +81,79 @@ func readSpooledRequestBody(c *gin.Context, sr *bodyspool.Request) ([]byte, erro
 	return skel, nil
 }
 
-// spoolDecodedBody streams a zstd body through a decoder. A body declared zstd without the zstd
-// magic is read raw, matching ReadRequestBody's legacy fallback for mislabeled JSON.
-func spoolDecodedBody(r io.Reader, encoding string) (io.Reader, func(), error) {
-	encoding = strings.ToLower(strings.TrimSpace(encoding))
-	if encoding == "" || encoding == "identity" {
+// spoolDecodedBody streams a body through one zstd decoder per zstd token of the
+// Content-Encoding list, each capped at maxBytes like the legacy decodeRequestBody. A body that
+// cannot be decoded but looks like JSON is read raw, matching the legacy fallback for mislabeled
+// JSON.
+func spoolDecodedBody(r io.Reader, encoding string, maxBytes int64) (io.Reader, func(), error) {
+	var tokens []string
+	for _, part := range strings.Split(encoding, ",") {
+		if enc := strings.ToLower(strings.TrimSpace(part)); enc != "" && enc != "identity" {
+			tokens = append(tokens, enc)
+		}
+	}
+	if len(tokens) == 0 {
 		return r, func() {}, nil
 	}
 	br := bufio.NewReader(r)
 	magic, _ := br.Peek(4)
-	if encoding == "zstd" && bytes.Equal(magic, []byte{0x28, 0xb5, 0x2f, 0xfd}) {
-		dec, err := zstd.NewReader(br, zstd.WithDecoderConcurrency(1), zstd.WithDecoderLowmem(true))
-		if err != nil {
-			return nil, nil, err
+	unsupported := ""
+	for _, enc := range tokens {
+		if enc != "zstd" {
+			unsupported = enc
+			break
 		}
-		return dec, dec.Close, nil
+	}
+	if unsupported == "" && bytes.Equal(magic, []byte{0x28, 0xb5, 0x2f, 0xfd}) {
+		var cur io.Reader = br
+		var decs []*zstd.Decoder
+		closeAll := func() {
+			for _, d := range decs {
+				d.Close()
+			}
+		}
+		for range tokens {
+			dec, err := zstd.NewReader(cur, zstd.WithDecoderConcurrency(1), zstd.WithDecoderLowmem(true))
+			if err != nil {
+				closeAll()
+				return nil, nil, err
+			}
+			decs = append(decs, dec)
+			cur = dec
+			if maxBytes > 0 && maxBytes < math.MaxInt64 {
+				cur = &decodedCap{r: dec, left: maxBytes, limit: maxBytes}
+			}
+		}
+		return cur, closeAll, nil
 	}
 	if first := bytes.TrimLeft(magic, " \t\r\n"); len(first) > 0 && (first[0] == '{' || first[0] == '[') {
 		return br, func() {}, nil
 	}
-	return nil, nil, errors.New("unsupported request content encoding: " + encoding)
+	if unsupported == "" {
+		return nil, nil, errors.New("failed to decode zstd request body: missing zstd magic")
+	}
+	return nil, nil, errors.New("unsupported request content encoding: " + unsupported)
+}
+
+// decodedCap fails with *http.MaxBytesError once more than limit decoded bytes are read.
+type decodedCap struct {
+	r     io.Reader
+	left  int64
+	limit int64
+}
+
+func (d *decodedCap) Read(p []byte) (int, error) {
+	if d.left < 0 {
+		return 0, &http.MaxBytesError{Limit: d.limit}
+	}
+	if int64(len(p)) > d.left+1 {
+		p = p[:d.left+1]
+	}
+	n, err := d.r.Read(p)
+	if d.left -= int64(n); d.left < 0 {
+		return 0, &http.MaxBytesError{Limit: d.limit}
+	}
+	return n, err
 }
 
 // ticketGate refuses a ticketless body when its received bytes cross 64 MiB (D4).
