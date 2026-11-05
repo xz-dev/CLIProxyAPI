@@ -59,10 +59,11 @@ type Request struct {
 	TicketID string
 	Covered  bool // the route ingests into the spool (otherwise a fallback path bounded by L)
 
-	mu      sync.Mutex
-	lease   *Lease
-	spool   *Spool
-	account *Account
+	mu       sync.Mutex
+	lease    *Lease
+	spool    *Spool
+	account  *Account
+	fallback int64 // k_path × N already charged for fallback copies of this request
 }
 
 // NewRequest starts the state of one request.
@@ -115,7 +116,8 @@ func (r *Request) Close() {
 
 // Fallback returns the full body for a path that is not converted (D2): skel itself when it
 // carries no marker, the materialized body charged at k_path × N when it fits L, otherwise the
-// named 413 for path.
+// named 413 for path. The charge is taken once per request (the largest N seen), not again on
+// every retry attempt; it is released when the handler returns.
 func (r *Request) Fallback(skel []byte, path string) ([]byte, error) {
 	sp := r.Spool()
 	if !sp.Has(skel) {
@@ -128,10 +130,24 @@ func (r *Request) Fallback(skel []byte, path string) ([]byte, error) {
 	if n > r.RT.Cfg.FallbackLimitBytes {
 		return nil, FallbackTooLarge(Hop, path, n, r.RT.Cfg.FallbackLimitBytes)
 	}
-	if err := r.Charge(Scaled(r.RT.Cfg.KPath, n)); err != nil {
+	if err := r.chargeFallback(Scaled(r.RT.Cfg.KPath, n)); err != nil {
 		return nil, err
 	}
 	return sp.Materialize(skel, r.RT.Cfg.FallbackLimitBytes, path)
+}
+
+// chargeFallback raises this request's fallback charge to need bytes.
+func (r *Request) chargeFallback(need int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if need <= r.fallback {
+		return nil
+	}
+	if err := r.Charge(need - r.fallback); err != nil {
+		return err
+	}
+	r.fallback = need
+	return nil
 }
 
 type ctxKey struct{}
