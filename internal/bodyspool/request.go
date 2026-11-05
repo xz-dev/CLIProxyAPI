@@ -153,9 +153,54 @@ func FromContext(ctx context.Context) *Request {
 // SpoolFrom returns the spool attached to ctx, or nil.
 func SpoolFrom(ctx context.Context) *Spool { return FromContext(ctx).Spool() }
 
+// CheckSendable fails closed (D2: markers never leave the hop) with the explicit 500
+// marker_unresolved when body carries a marker that the request's spool will not splice: a marker
+// of a live spool other than the request's own, or, while the switch is on for the request, any
+// marker-shaped token that is not the request's own. Every send path calls it before writing.
+func CheckSendable(ctx context.Context, body []byte) error {
+	prefix := []byte(MarkerPrefix)
+	if !bytes.Contains(body, prefix) {
+		return nil
+	}
+	req := FromContext(ctx)
+	sp := req.Spool()
+	own := sp.Has(body)
+	for rest := body; ; {
+		i := bytes.Index(rest, prefix)
+		if i < 0 {
+			return nil
+		}
+		rest = rest[i+len(prefix):]
+		if len(rest) < nonceHex || !isHex(rest[:nonceHex]) {
+			continue
+		}
+		nonce := string(rest[:nonceHex])
+		if own && nonce == sp.nonce {
+			continue // resolved by the splice reader (which validates the index)
+		}
+		if _, live := registry.Load(nonce); live || req != nil {
+			return &Error{Status: 500, Code: "marker_unresolved", Hop: Hop,
+				Message: "request body carries a spool marker that this request's spool cannot resolve; nothing was sent upstream"}
+		}
+	}
+}
+
+func isHex(b []byte) bool {
+	for _, c := range b {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // NewHTTPRequest builds an upstream request. A body carrying this request's markers is sent as a
-// splice stream with an exact Content-Length and a replayable GetBody; any other body is sent as is.
+// splice stream with an exact Content-Length and a replayable GetBody; any other body is sent as
+// is. A body with markers no spool resolves is refused (CheckSendable).
 func NewHTTPRequest(ctx context.Context, method, url string, body []byte) (*http.Request, error) {
+	if err := CheckSendable(ctx, body); err != nil {
+		return nil, err
+	}
 	sp := SpoolFrom(ctx)
 	if !sp.Has(body) {
 		return http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
@@ -187,6 +232,9 @@ func SplicedSize(ctx context.Context, body []byte) (int64, error) {
 
 // WriteSpliced writes the spliced view of body to w.
 func WriteSpliced(ctx context.Context, w io.Writer, body []byte) error {
+	if err := CheckSendable(ctx, body); err != nil {
+		return err
+	}
 	sp := SpoolFrom(ctx)
 	if !sp.Has(body) {
 		_, err := w.Write(body)

@@ -2,6 +2,7 @@ package bodyspool
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -248,5 +249,35 @@ func TestIngestIsFlat(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(sp.dir); len(entries) != 0 {
 		t.Fatalf("spool directory holds named files: %v", entries)
+	}
+}
+
+// TestCheckSendableFailsClosed: a body with a live marker no spool on the context resolves, or any
+// marker-shaped token while the switch is on for the request, is refused with 500
+// marker_unresolved; the request's own markers and plain "~lrcblob:" text pass.
+func TestCheckSendableFailsClosed(t *testing.T) {
+	sk, sp := ingest(t, sampleBody())
+	unresolved := func(name string, err error) {
+		t.Helper()
+		var e *Error
+		if !errors.As(err, &e) || e.Status != 500 || e.Code != "marker_unresolved" {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	unresolved("live marker, no request", CheckSendable(context.Background(), sk))
+	rt := &Runtime{Charger: &Charger{Hop: Hop}}
+	own := rt.NewRequest("", true)
+	own.SetSpool(sp)
+	if err := CheckSendable(WithRequest(context.Background(), own), sk); err != nil {
+		t.Fatalf("own markers refused: %v", err)
+	}
+	forged := []byte(`{"t":"` + MarkerPrefix + strings.Repeat("ab", 16) + `:00000000~"}`)
+	if err := CheckSendable(context.Background(), forged); err != nil {
+		t.Fatalf("switch off: dead nonce refused: %v", err)
+	}
+	unresolved("switch on, foreign marker", CheckSendable(WithRequest(context.Background(), rt.NewRequest("", true)), forged))
+	plain := []byte(`{"t":"` + MarkerPrefix + ` text"}`)
+	if err := CheckSendable(WithRequest(context.Background(), rt.NewRequest("", true)), plain); err != nil {
+		t.Fatalf("plain text refused: %v", err)
 	}
 }
