@@ -118,6 +118,7 @@ var reviewedInPlaceByteWrites = map[string]reviewedInPlaceByteWrite{
 	"internal/home/client.go":                                       {1, "zeroes a secret buffer after json.Unmarshal has copied every value out"},
 	"internal/pluginstore/auth.go":                                  {1, "zeroes a locally built credential buffer after base64 encoding copied it out"},
 	"sdk/cliproxy/auth/selector_weighted.go":                        {2, "shifts weightedPoolMember bookkeeping structs when inserting or removing members; no byte of any JSON payload is rewritten"},
+	"internal/bodyspool/spool.go":                                   {1, "fills the spool's private write buffer (wbuf) before writing it to the spool file; no payload or GJSON result aliases it"},
 }
 
 // TestInPlaceByteWritesAreReviewed keeps the set of in-place byte writes small
