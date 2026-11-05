@@ -72,3 +72,18 @@ func (e XAIAutoExecutor) ForAPIKey() cliproxyauth.ProviderExecutor {
 	}
 	return &e
 }
+
+// SplicesBodySpool marks the executors whose send points splice body-spool skeletons (D2).
+func (e CodexExecutor) SplicesBodySpool() bool { return true }
+
+// SplicesBodySpool marks the executors whose send points splice body-spool skeletons (D2).
+func (e CodexWebsocketsExecutor) SplicesBodySpool() bool { return true }
+
+// SplicesBodySpool marks the executors whose send points splice body-spool skeletons (D2).
+func (e *CodexAutoExecutor) SplicesBodySpool() bool { return true }
+
+// SplicesBodySpool marks the executors whose send points splice body-spool skeletons (D2).
+func (e ClaudeExecutor) SplicesBodySpool() bool { return true }
+
+// SplicesBodySpool marks the executors whose send points splice body-spool skeletons (D2).
+func (e OpenAICompatExecutor) SplicesBodySpool() bool { return true }

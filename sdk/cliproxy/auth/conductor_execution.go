@@ -336,6 +336,10 @@ func isRequestTerminatedError(err error) bool {
 }
 
 func applyRequestAfterAuthInterceptor(ctx context.Context, executor ProviderExecutor, provider string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, requestedModel string) (cliproxyexecutor.Request, cliproxyexecutor.Options, error) {
+	req, opts, errSpool := guardBodySpool(ctx, executor, provider, req, opts, opts.RequestAfterAuthInterceptor != nil)
+	if errSpool != nil {
+		return req, opts, errSpool
+	}
 	if opts.RequestAfterAuthInterceptor == nil {
 		return req, opts, nil
 	}

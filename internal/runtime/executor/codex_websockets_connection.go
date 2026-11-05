@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
@@ -88,6 +89,35 @@ func writeWebsocketPayloadMessage(provider string, sess *codexWebsocketSession, 
 
 func writeCodexWebsocketMessage(sess *codexWebsocketSession, conn *websocket.Conn, payload []byte) error {
 	return writeWebsocketPayloadMessage("codex", sess, conn, payload)
+}
+
+// writeCodexWebsocketMessageCtx writes a turn frame; a body-spool skeleton is spliced into the
+// frame through NextWriter so the full body is never assembled in memory (D2).
+func writeCodexWebsocketMessageCtx(ctx context.Context, sess *codexWebsocketSession, conn *websocket.Conn, payload []byte) error {
+	sp := bodyspool.SpoolFrom(ctx)
+	if !sp.Has(payload) {
+		return writeCodexWebsocketMessage(sess, conn, payload)
+	}
+	spliced, _, err := sp.Reader(payload)
+	if err != nil {
+		return err
+	}
+	if conn == nil {
+		return fmt.Errorf("codex websockets executor: websocket conn is nil")
+	}
+	if sess != nil {
+		sess.writeMu.Lock()
+		defer sess.writeMu.Unlock()
+	}
+	w, err := conn.NextWriter(websocket.TextMessage)
+	if err != nil {
+		return err
+	}
+	if _, err = io.CopyBuffer(w, spliced, make([]byte, codexWebsocketWriteChunkSize)); err != nil {
+		_ = w.Close()
+		return err
+	}
+	return w.Close()
 }
 
 func mapCodexWebsocketWriteError(sess *codexWebsocketSession, conn *websocket.Conn, err error) error {

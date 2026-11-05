@@ -19,7 +19,11 @@ const MaxRequestBodyBytesContextKey = "maxRequestBodyBytes"
 
 // ReadRequestBody reads the incoming request body and decodes supported
 // Content-Encoding values before handlers inspect JSON fields.
+// With the body spool on a covered route it returns the skeleton (large media spooled, D2).
 func ReadRequestBody(c *gin.Context) ([]byte, error) {
+	if sr := bodySpoolRequest(c); sr != nil && sr.Covered {
+		return readSpooledRequestBody(c, sr)
+	}
 	maxBytes := int64(0)
 	if c != nil {
 		maxBytes = c.GetInt64(MaxRequestBodyBytesContextKey)

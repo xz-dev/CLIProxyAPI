@@ -108,16 +108,22 @@ func TestRoundTripOddInputs(t *testing.T) {
 	}
 }
 
-// TestStringsValidMatchesJSONValid: json.Valid(body) == json.Valid(skeleton) && StringsValid().
-func TestStringsValidMatchesJSONValid(t *testing.T) {
+// TestNonCanonicalMediaStaysInline: escapes, non-ASCII, HTML characters or a truncated value
+// put a media string back inline, so json.Valid(skeleton) == json.Valid(body) and re-encoding
+// translators see original bytes.
+func TestNonCanonicalMediaStaysInline(t *testing.T) {
 	big := strings.Repeat("A", 70<<10)
-	for _, in := range []string{
-		`{"image_url":"` + big + `"}`, `{"image_url":"` + big + "\x01" + `"}`, `{"image_url":"` + big + `\x"}`,
-		`{"image_url":"` + big + `\u12G4"}`, `{"image_url":"` + big + `\u00e9\n\/"}`, `{"image_url":"` + big + "\xff\xfe" + `"}`,
+	for in, blobs := range map[string]int{
+		`{"image_url":"` + big + `"}`: 1, `{"image_url":"` + big + `\/"}`: 0, `{"image_url":"` + big + "\x01" + `"}`: 0,
+		`{"image_url":"` + big + `\u00e9"}`: 0, `{"image_url":"` + big + `<&>"}`: 0, `{"image_url":"` + big + "\xff\xfe" + `"}`: 0,
+		`{"image_url":"` + big: 0,
 	} {
 		sk, sp := ingest(t, []byte(in))
-		if got, want := json.Valid(sk) && sp.StringsValid(), json.Valid([]byte(in)); got != want {
-			t.Errorf("%q: spool validity %v, json.Valid %v", in[len(in)-12:], got, want)
+		if sp.Blobs() != blobs || json.Valid(sk) != json.Valid([]byte(in)) {
+			t.Errorf("%q: blobs=%d want %d, skeleton valid %v", in[len(in)-8:], sp.Blobs(), blobs, json.Valid(sk))
+		}
+		if got := mustMaterialize(t, sk, sp); !bytes.Equal(got, []byte(in)) {
+			t.Errorf("%q: round trip changed bytes", in[len(in)-8:])
 		}
 	}
 }
@@ -198,7 +204,7 @@ func FuzzRoundTrip(f *testing.F) {
 		if err != nil || !bytes.Equal(got, in) {
 			t.Fatalf("round trip changed %q -> %q (%v)", in, got, err)
 		}
-		if json.Valid(sk) && sp.StringsValid() != json.Valid(in) {
+		if json.Valid(sk) != json.Valid(in) {
 			t.Fatalf("validity parity broken for %q", in)
 		}
 	})

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
@@ -74,6 +75,8 @@ func RecordAPIRequest(ctx context.Context, cfg *config.Config, info UpstreamRequ
 	if ginCtx == nil {
 		return
 	}
+	// Body spool: upstream request logs carry the skeleton with markers redacted, never blobs.
+	info.Body = bodyspool.SpoolFrom(ctx).Redact(info.Body)
 	if !cfg.RequestLog {
 		deferAPIRequest(ginCtx, info)
 		return

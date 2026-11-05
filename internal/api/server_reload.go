@@ -178,6 +178,9 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
 	s.cfgMu.Lock()
 	s.cfg = cfg
 	s.cfgMu.Unlock()
+	if errSpool := applyBodySpool(cfg); errSpool != nil {
+		log.WithError(errSpool).Error("body spool configuration rejected; the previous body spool configuration stays active")
+	}
 	if s.codexLiveHandler != nil {
 		if errUpdate := s.codexLiveHandler.UpdateConfig(cfg); errUpdate != nil {
 			log.WithError(errUpdate).Error("failed to update Codex Live media relay configuration")

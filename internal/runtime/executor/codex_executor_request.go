@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
@@ -160,28 +161,51 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 	rawJSON = helps.SanitizeCodexInputItemIDs(rawJSON)
 	rawJSON = helps.FinalizePayload(ctx, rawJSON)
 	wireBody := rawJSON
+	// Body spool: the size checks and the compression run over the spliced stream (D2).
+	upstreamLen, errSize := bodyspool.SplicedSize(ctx, rawJSON)
+	if errSize != nil {
+		return nil, nil, errSize
+	}
+	var spooledReq *http.Request
+	var err error
 	if e.cfg != nil && e.cfg.Codex.UpstreamRequestCompression && auth != nil &&
 		!codexAuthUsesAPIKey(auth) && !codexUseSIWCForRequest(ctx, auth, headers) &&
-		len(rawJSON) >= e.cfg.Codex.RequestCompressionMinBytes() {
+		upstreamLen >= int64(e.cfg.Codex.RequestCompressionMinBytes()) {
 		parsedURL, errParse := neturl.Parse(url)
 		if errParse == nil && strings.EqualFold(parsedURL.Hostname(), "chatgpt.com") && strings.HasPrefix(parsedURL.Path, "/backend-api/codex/") {
-			encoder, errNewWriter := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
-			if errNewWriter == nil {
-				compressed := encoder.EncodeAll(rawJSON, nil)
-				if errClose := encoder.Close(); errClose != nil {
-					log.Errorf("codex executor: close request encoder error: %v", errClose)
-				} else if len(compressed) < len(rawJSON) {
-					wireBody = compressed
+			if sp := bodyspool.SpoolFrom(ctx); sp.Has(rawJSON) {
+				n, open, errDerive := sp.Derive(rawJSON, upstreamLen, codexZstdFill)
+				if errDerive != nil {
+					return nil, nil, errDerive
+				}
+				if n < upstreamLen {
+					if spooledReq, err = bodyspool.NewDerivedHTTPRequest(ctx, http.MethodPost, url, n, open); err != nil {
+						return nil, nil, err
+					}
+					spooledReq.Header.Set("Content-Encoding", "zstd")
+				}
+			} else {
+				encoder, errNewWriter := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+				if errNewWriter == nil {
+					compressed := encoder.EncodeAll(rawJSON, nil)
+					if errClose := encoder.Close(); errClose != nil {
+						log.Errorf("codex executor: close request encoder error: %v", errClose)
+					} else if len(compressed) < len(rawJSON) {
+						wireBody = compressed
+					}
 				}
 			}
 		}
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(wireBody))
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(wireBody) < len(rawJSON) {
-		httpReq.Header.Set("Content-Encoding", "zstd")
+	httpReq := spooledReq
+	if httpReq == nil {
+		httpReq, err = bodyspool.NewHTTPRequest(ctx, http.MethodPost, url, wireBody)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(wireBody) < len(rawJSON) {
+			httpReq.Header.Set("Content-Encoding", "zstd")
+		}
 	}
 	alignCodexContentEncoding(httpReq)
 	if httpReq.Header.Get("Accept-Encoding") == "" {
@@ -297,7 +321,7 @@ func doCodexRequest(client *http.Client, req *http.Request, upstreamBody []byte,
 	if errClose := resp.Body.Close(); errClose != nil {
 		log.Errorf("codex executor: close rejected response body error: %v", errClose)
 	}
-	plainReq, errNewRequest := http.NewRequestWithContext(req.Context(), req.Method, req.URL.String(), bytes.NewReader(upstreamBody))
+	plainReq, errNewRequest := bodyspool.NewHTTPRequest(req.Context(), req.Method, req.URL.String(), upstreamBody)
 	if errNewRequest != nil {
 		return nil, errNewRequest
 	}
@@ -758,4 +782,17 @@ func codexImageGenerationToolModel(body []byte) string {
 		}
 	}
 	return codexDefaultImageToolModel
+}
+
+// codexZstdFill compresses the spliced request body into the spool (codex upstream compression).
+func codexZstdFill(w io.Writer, spliced io.Reader) error {
+	encoder, err := zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(1))
+	if err != nil {
+		return err
+	}
+	if _, err = io.Copy(encoder, spliced); err != nil {
+		_ = encoder.Close()
+		return err
+	}
+	return encoder.Close()
 }

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	"github.com/tidwall/gjson"
@@ -411,6 +412,11 @@ func canonicalResourcePart(value gjson.Result) CanonicalPart {
 
 func canonicalJSONPart(kind string, value gjson.Result) CanonicalPart {
 	raw := value.Raw
+	// Body spool: a part holding a spool marker is fingerprinted over its spliced bytes, so the
+	// fingerprint equals the one of the original body.
+	if d, ok := bodyspool.SplicedPartDigest(raw, sparseFingerprintBytes); ok && d.Size > largePartThreshold {
+		return CanonicalPart{Kind: kind, Value: d.Sample, Digest: d.Digest, OriginalSize: d.Size, Sampled: true}
+	}
 	if len(raw) > largePartThreshold {
 		return CanonicalPart{
 			Kind:         kind,

@@ -154,6 +154,9 @@ func (h *GeminiAPIHandler) GeminiHandler(c *gin.Context) {
 	method := action[1]
 	rawJSON, errRead := c.GetRawData()
 	if errRead != nil && c.Request != nil && c.Request.Body != nil {
+		if handlers.WriteBodySpoolError(c, errRead) {
+			return
+		}
 		c.JSON(clienterror.HTTPStatusFromErrorOr(errRead, http.StatusBadRequest), handlers.ErrorResponse{
 			Error: handlers.ErrorDetail{
 				Message: fmt.Sprintf("Invalid request: %v", errRead),

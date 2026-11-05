@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	claudeauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/claude"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
@@ -867,6 +868,26 @@ func isAnthropicUpstreamURL(u *url.URL) bool {
 
 // isAnthropicUpstreamBase reports whether a configured base URL targets Anthropic's
 // first-party API. Used before the outgoing request exists.
+// claudeFirstPartyCeiling is the Anthropic first-party Messages request ceiling in bytes (D1).
+const claudeFirstPartyCeiling = 128_000_000
+
+// claudeProviderCeiling refuses, with the named 413 and without sending, a body above the
+// first-party Anthropic ceiling. It applies with the body spool switch on; other claude routes
+// keep the 256 MiB cap and relay the provider's own 413.
+func claudeProviderCeiling(ctx context.Context, baseURL string, body []byte) error {
+	if bodyspool.FromContext(ctx) == nil || !isAnthropicUpstreamBase(baseURL) {
+		return nil
+	}
+	n, err := bodyspool.SplicedSize(ctx, body)
+	if err != nil {
+		return err
+	}
+	if n > claudeFirstPartyCeiling {
+		return bodyspool.CeilingTooLarge(bodyspool.Hop, "claude executor (Anthropic first-party Messages)", n, claudeFirstPartyCeiling)
+	}
+	return nil
+}
+
 func isAnthropicUpstreamBase(baseURL string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil {

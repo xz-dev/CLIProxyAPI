@@ -94,6 +94,9 @@ func buildInteractionsExecutionRequest(target interactionsRequestTarget, modelNa
 func (h *GeminiAPIHandler) Interactions(c *gin.Context) {
 	rawJSON, errRead := c.GetRawData()
 	if errRead != nil {
+		if handlers.WriteBodySpoolError(c, errRead) {
+			return
+		}
 		c.JSON(clienterror.HTTPStatusFromErrorOr(errRead, http.StatusBadRequest), handlers.ErrorResponse{Error: handlers.ErrorDetail{Message: errRead.Error(), Type: "invalid_request_error"}})
 		return
 	}

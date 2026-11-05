@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
@@ -826,7 +827,11 @@ func hashRoot(root canonicalRoot) string {
 	if errMarshal != nil {
 		return ""
 	}
-	sum := sha256.Sum256(encoded)
+	// Body spool: a root built from a skeleton hashes the original media values.
+	sum, spliced := bodyspool.SplicedSHA256(encoded)
+	if !spliced {
+		sum = sha256.Sum256(encoded)
+	}
 	return identityPrefix + hex.EncodeToString(sum[:])
 }
 

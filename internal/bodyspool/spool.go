@@ -23,8 +23,13 @@ type Spool struct {
 	nonce   string
 	blobs   []segment
 	size    int64
-	invalid bool // a spooled string breaks encoding/json string rules
 	w       *spoolWriter
+	wbuf    []byte
+
+	deriveMu sync.Mutex
+	derived  []derived
+	tail     int64    // end of the file: blobs, then derived segments
+	digests  sync.Map // fragment -> PartDigest (session fingerprints)
 }
 
 func newSpool(dir, nonce string, reserve int64, hop string) (*Spool, error) {
@@ -32,8 +37,10 @@ func newSpool(dir, nonce string, reserve int64, hop string) (*Spool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Spool{f: f, dir: dir, hop: hop, reserve: reserve, nonce: nonce,
-		w: &spoolWriter{f: f, reserve: reserve, dir: dir, hop: hop}}, nil
+	s := &Spool{f: f, dir: dir, hop: hop, reserve: reserve, nonce: nonce,
+		w: &spoolWriter{f: f, reserve: reserve, dir: dir, hop: hop}}
+	register(s)
+	return s, nil
 }
 
 // Close closes the anonymous file, which frees its blocks. Safe on nil and twice.
@@ -46,6 +53,7 @@ func (s *Spool) Close() error {
 	if s.f == nil {
 		return nil
 	}
+	unregister(s)
 	err := s.f.Close()
 	s.f = nil
 	return err
@@ -67,10 +75,6 @@ func (s *Spool) BlobBytes() int64 {
 	return s.size
 }
 
-// StringsValid reports whether every spooled string obeys encoding/json string rules, so
-// json.Valid(full body) == json.Valid(skeleton) && StringsValid().
-func (s *Spool) StringsValid() bool { return s == nil || !s.invalid }
-
 func (s *Spool) marker(idx int) []byte {
 	return fmt.Appendf(nil, "%s%s:%08x~", MarkerPrefix, s.nonce, idx)
 }
@@ -91,7 +95,10 @@ type blobWriter struct {
 }
 
 func (s *Spool) begin() *blobWriter {
-	return &blobWriter{s: s, off: s.size, buf: make([]byte, 0, 64<<10)}
+	if s.wbuf == nil {
+		s.wbuf = make([]byte, 0, 64<<10) // one write buffer per spool, reused by every blob
+	}
+	return &blobWriter{s: s, off: s.size, buf: s.wbuf[:0]}
 }
 
 func (b *blobWriter) writeByte(c byte) error {
@@ -127,16 +134,14 @@ func (b *blobWriter) flush() error {
 	return nil
 }
 
-func (b *blobWriter) end(valid bool) (int, error) {
+func (b *blobWriter) end() (segment, error) {
 	if err := b.flush(); err != nil {
-		return 0, err
+		return segment{}, err
 	}
 	if err := b.s.w.finish(); err != nil {
-		return 0, err
+		return segment{}, err
 	}
-	b.s.invalid = b.s.invalid || !valid
-	b.s.blobs = append(b.s.blobs, segment{off: b.off, n: b.s.size - b.off})
-	return len(b.s.blobs) - 1, nil
+	return segment{off: b.off, n: b.s.size - b.off}, nil
 }
 
 // spoolWriter appends to an anonymous file under the D3 rules: a disk-floor check before each

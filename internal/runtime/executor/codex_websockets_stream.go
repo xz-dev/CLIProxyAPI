@@ -181,7 +181,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		}
 	}
 	cliproxyexecutor.MarkUpstreamAttempt(ctx)
-	if errSend := writeCodexWebsocketMessage(sess, conn, wsReqBody); errSend != nil {
+	if errSend := writeCodexWebsocketMessageCtx(ctx, sess, conn, wsReqBody); errSend != nil {
 		errSend = mapCodexWebsocketWriteError(sess, conn, errSend)
 		helps.RecordAPIWebsocketError(ctx, e.cfg, "send", errSend)
 		if sess != nil && !isEphemeralSession && cliproxyexecutor.DownstreamWebsocket(ctx) {

@@ -174,6 +174,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	engine.Use(logging.GinLogrusRecovery())
 	engine.Use(logging.CPATraceIDMiddleware())
 	engine.Use(s.maxRequestBodyBytesMiddleware())
+	engine.Use(s.bodySpoolMiddleware())
 	for _, mw := range optionState.extraMiddleware {
 		engine.Use(mw)
 	}
@@ -307,6 +308,10 @@ func (s *Server) Start() error {
 	}
 
 	cfg := s.getConfig()
+	if errSpool := applyBodySpool(cfg); errSpool != nil {
+		_ = listener.Close()
+		return fmt.Errorf("failed to start HTTP server: body spool: %w", errSpool)
+	}
 	useTLS := cfg != nil && cfg.TLS.Enable
 	if useTLS {
 		certPath := strings.TrimSpace(cfg.TLS.Cert)

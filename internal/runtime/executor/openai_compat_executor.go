@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
@@ -173,7 +174,7 @@ func (e *OpenAICompatExecutor) executeWithCredentials(ctx context.Context, auth 
 	url := strings.TrimSuffix(baseURL, "/") + endpoint
 	translated = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", translated, originalTranslated, requestedModel, requestPath, opts.Headers)
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
+	httpReq, err := bodyspool.NewHTTPRequest(ctx, http.MethodPost, url, translated)
 	if err != nil {
 		return resp, err
 	}
@@ -274,7 +275,7 @@ func (e *OpenAICompatExecutor) executeImages(ctx context.Context, auth *cliproxy
 	reporter.SetTranslatedReasoningEffort(payload, "openai")
 
 	url := strings.TrimSuffix(baseURL, "/") + endpointPath
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	httpReq, err := bodyspool.NewHTTPRequest(ctx, http.MethodPost, url, payload)
 	if err != nil {
 		return resp, err
 	}
@@ -407,7 +408,7 @@ func (e *OpenAICompatExecutor) executeStreamWithCredentials(ctx context.Context,
 	url := strings.TrimSuffix(baseURL, "/") + "/chat/completions"
 	translated = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", translated, originalTranslated, requestedModel, requestPath, opts.Headers)
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
+	httpReq, err := bodyspool.NewHTTPRequest(ctx, http.MethodPost, url, translated)
 	if err != nil {
 		return nil, err
 	}
@@ -692,7 +693,7 @@ func (e *OpenAICompatExecutor) executeImagesStream(ctx context.Context, auth *cl
 	reporter.SetTranslatedReasoningEffort(payload, "openai")
 
 	url := strings.TrimSuffix(baseURL, "/") + endpointPath
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	httpReq, err := bodyspool.NewHTTPRequest(ctx, http.MethodPost, url, payload)
 	if err != nil {
 		return nil, err
 	}

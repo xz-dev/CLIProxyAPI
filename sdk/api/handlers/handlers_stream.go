@@ -296,6 +296,13 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		close(errChan)
 		return nil, nil, errChan
 	}
+	rawJSON, errSpool := h.bodySpoolHookGuard(ctx, rawJSON, routeDecision.ExecutorPluginID != "")
+	if errSpool != nil {
+		errChan := make(chan *interfaces.ErrorMessage, 1)
+		errChan <- errSpool
+		close(errChan)
+		return nil, nil, errChan
+	}
 	if routeDecision.ExecutorPluginID != "" {
 		return h.streamWithPluginExecutor(ctx, entryProtocol, responseProtocol, modelName, originalRequestedModel, rawJSON, alt, routeDecision.ExecutorPluginID, execOptions)
 	}
