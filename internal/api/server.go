@@ -310,7 +310,7 @@ func (s *Server) Start() error {
 	cfg := s.getConfig()
 	if errSpool := applyBodySpool(cfg); errSpool != nil {
 		_ = listener.Close()
-		return fmt.Errorf("failed to start HTTP server: body spool: %w", errSpool)
+		return fmt.Errorf("failed to start HTTP server: %w: %w", ErrBodySpoolStartup, errSpool)
 	}
 	useTLS := cfg != nil && cfg.TLS.Enable
 	if useTLS {

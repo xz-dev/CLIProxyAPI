@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -12,6 +13,10 @@ import (
 )
 
 var bodySpoolRuntime atomic.Pointer[bodyspool.Runtime]
+
+// ErrBodySpoolStartup marks a server start refused by the body-spool configuration; the process
+// exits non-zero on it.
+var ErrBodySpoolStartup = errors.New("body spool configuration refused")
 
 // applyBodySpool validates and activates the body-spool configuration. At startup an error
 // refuses to start; on reload the previous runtime stays active and the error is returned.
