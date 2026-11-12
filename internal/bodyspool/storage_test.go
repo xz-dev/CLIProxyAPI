@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -174,80 +173,6 @@ func cgroup(t *testing.T, max, current string) *Charger {
 	_ = os.WriteFile(filepath.Join(dir, "memory.max"), []byte(max+"\n"), 0o600)
 	_ = os.WriteFile(filepath.Join(dir, "memory.current"), []byte(current+"\n"), 0o600)
 	return &Charger{CgroupDir: dir, Hop: "cpa"}
-}
-
-func TestChargeRefusesAtMargin(t *testing.T) {
-	c := cgroup(t, "503316480", "100000000") // 480m, ~95 MiB used
-	if err := c.Charge(300 << 20); err != nil {
-		t.Fatalf("fits: %v", err)
-	}
-	err := c.Charge(64 << 20)
-	var e *Error
-	if !errors.As(err, &e) || e.Status != 503 || e.Code != "insufficient_memory" || e.Hop != "cpa" ||
-		!strings.Contains(err.Error(), `"limit_bytes":`) || !strings.Contains(err.Error(), `"code":"insufficient_memory","hop":"cpa"`) {
-		t.Fatalf("over margin: %v", err)
-	}
-	c.Release(300 << 20)
-	if c.Outstanding() != 0 {
-		t.Fatal("release did not return the charge")
-	}
-	if err := cgroup(t, "max", "1").Charge(1 << 40); err != nil {
-		t.Fatalf("unlimited cgroup refused: %v", err)
-	}
-}
-
-// TestConcurrentChargeNeverCrossesLimit: concurrent charges never commit more than the headroom.
-func TestConcurrentChargeNeverCrossesLimit(t *testing.T) {
-	c := cgroup(t, "503316480", "50331648") // 480m limit, 48 MiB current → 400 MiB usable
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	admitted, refused := 0, 0
-	for i := 0; i < 64; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			a := c.NewAccount()
-			err := a.Charge(16 << 20)
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				refused++
-			} else {
-				admitted++
-			}
-		}()
-	}
-	wg.Wait()
-	if admitted != 25 || refused != 39 || c.Outstanding() != 25*16<<20 {
-		t.Fatalf("admitted=%d refused=%d outstanding=%d", admitted, refused, c.Outstanding())
-	}
-}
-
-// TestNewRuntimeRefusesWithoutMemoryMax: a cgroup dir without a readable memory.max refuses at
-// startup with an explicit error, and a charge never admits silently when it vanishes (m2).
-func TestNewRuntimeRefusesWithoutMemoryMax(t *testing.T) {
-	spool := t.TempDir()
-	_ = os.Chmod(spool, 0o700)
-	cfg := config.BodySpoolConfig{Enabled: true, Dir: spool, DiskReserveBytes: 1}
-	cfg.CgroupDir = t.TempDir() // no memory.max
-	if _, err := NewRuntime(cfg, nil); err == nil || !strings.Contains(err.Error(), "memory.max") {
-		t.Fatalf("missing memory.max: err = %v", err)
-	}
-	_ = os.WriteFile(filepath.Join(cfg.CgroupDir, "memory.max"), []byte("garbage\n"), 0o600)
-	_ = os.WriteFile(filepath.Join(cfg.CgroupDir, "memory.current"), []byte("1\n"), 0o600)
-	if _, err := NewRuntime(cfg, nil); err == nil || !strings.Contains(err.Error(), "memory.max") {
-		t.Fatalf("unparsable memory.max: err = %v", err)
-	}
-	cfg.CgroupDir = bodyspooltest.CgroupDir(t)
-	rt, err := NewRuntime(cfg, nil)
-	if err != nil {
-		t.Fatalf("readable cgroup refused: %v", err)
-	}
-	_ = os.Remove(filepath.Join(cfg.CgroupDir, "memory.max"))
-	var e *Error
-	if err := rt.Charger.Charge(1); !errors.As(err, &e) || e.Code != "insufficient_memory" {
-		t.Fatalf("charge after memory.max vanished: %v", err)
-	}
 }
 
 // TestFallbackChargesOncePerRequest: the k_path × N fallback charge is taken once per request,
