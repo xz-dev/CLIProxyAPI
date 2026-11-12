@@ -30,7 +30,7 @@ type Runtime struct {
 	Charger *Charger
 }
 
-// NewRuntime validates cfg (CheckDir, readable cgroup memory files) and returns the runtime, or nil when the switch is off.
+// NewRuntime validates the spool directory and returns the runtime, or nil when the switch is off.
 // The charge counter carries over from prev so in-flight charges stay accounted across reloads.
 func NewRuntime(cfg config.BodySpoolConfig, prev *Runtime) (*Runtime, error) {
 	if !cfg.Enabled {
@@ -41,9 +41,6 @@ func NewRuntime(cfg config.BodySpoolConfig, prev *Runtime) (*Runtime, error) {
 		return nil, err
 	}
 	ch := &Charger{CgroupDir: eff.CgroupDir, Hop: Hop, ReleaseReclaim: debug.FreeOSMemory}
-	if err := ch.Check(); err != nil {
-		return nil, err
-	}
 	if prev != nil && prev.Charger != nil && prev.Charger.CgroupDir == eff.CgroupDir {
 		ch = prev.Charger
 	}

@@ -1,24 +1,14 @@
 package bodyspool
 
 import (
-	"fmt"
-	"math"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 )
 
-// MemoryMargin is the margin kept under memory.max by every charge (D4).
-const MemoryMargin = 32 << 20
-
-// Charger is the per-hop memory charge (D4): an atomic byte counter of memory that in-flight
-// requests may still use, checked against the hop's own cgroup before each step is allocated.
-// No count cap, no lock beyond the counter, no timer, no soft accounting.
+// Charger tracks request memory accounting for release and reclamation only.
+// It does not impose a memory-admission limit; the container enforces its hard limit.
 type Charger struct {
-	CgroupDir   string // cgroup v2 directory holding memory.max and memory.current
+	CgroupDir   string // legacy configuration identity for accounting reuse across reloads
 	Hop         string
 	outstanding atomic.Int64
 
@@ -32,60 +22,13 @@ type Charger struct {
 // Outstanding returns the bytes currently charged.
 func (c *Charger) Outstanding() int64 { return c.outstanding.Load() }
 
-func readCgroupInt(path string) (int64, bool, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return 0, false, err
-	}
-	s := strings.TrimSpace(string(raw))
-	if s == "max" {
-		return math.MaxInt64, false, nil
-	}
-	v, err := strconv.ParseInt(s, 10, 64)
-	return v, true, err
-}
-
-// Check reads memory.max and memory.current once. NewRuntime refuses to start when either is
-// missing or unreadable, so the charge never runs without its cgroup (no soft accounting).
-func (c *Charger) Check() error {
-	for _, name := range []string{"memory.max", "memory.current"} {
-		if _, _, err := readCgroupInt(filepath.Join(c.CgroupDir, name)); err != nil {
-			return fmt.Errorf("body spool: cgroup-dir %q: cannot read %s: %w", c.CgroupDir, name, err)
-		}
+// Charge records step bytes without rejecting a request based on memory pressure.
+// Keep the error return for existing ingest and fallback callbacks.
+func (c *Charger) Charge(step int64) error {
+	if step > 0 {
+		c.outstanding.Add(step)
 	}
 	return nil
-}
-
-// Charge reserves step bytes if memory.max − memory.current − outstanding ≥ step + 32 MiB, and
-// otherwise refuses with 503 insufficient_memory naming the hop and the bytes. A cgroup without a
-// memory limit (memory.max "max") has no cgroup OOM, so it admits. A missing or unreadable
-// memory.max refuses.
-func (c *Charger) Charge(step int64) error {
-	if step <= 0 {
-		return nil
-	}
-	limit, limited, err := readCgroupInt(filepath.Join(c.CgroupDir, "memory.max"))
-	if err != nil {
-		return c.refuse(step, 0, fmt.Sprintf("cannot read memory.max: %v", err))
-	}
-	if !limited {
-		c.outstanding.Add(step)
-		return nil
-	}
-	current, _, err := readCgroupInt(filepath.Join(c.CgroupDir, "memory.current"))
-	if err != nil {
-		return c.refuse(step, 0, fmt.Sprintf("cannot read memory.current: %v", err))
-	}
-	for {
-		out := c.outstanding.Load()
-		avail := limit - current - out
-		if avail < step+MemoryMargin {
-			return c.refuse(step, avail, "")
-		}
-		if c.outstanding.CompareAndSwap(out, out+step) {
-			return nil
-		}
-	}
 }
 
 // Release returns n charged bytes.
@@ -93,14 +36,6 @@ func (c *Charger) Release(n int64) {
 	if n > 0 {
 		c.outstanding.Add(-n)
 	}
-}
-
-func (c *Charger) refuse(step, avail int64, why string) error {
-	msg := fmt.Sprintf("%s: memory charge of %d bytes refused: %d bytes available under memory.max minus outstanding charges, %d byte margin required", c.Hop, step, avail, MemoryMargin)
-	if why != "" {
-		msg = fmt.Sprintf("%s: memory charge of %d bytes refused: %s", c.Hop, step, why)
-	}
-	return &Error{Status: 503, Code: "insufficient_memory", Hop: c.Hop, Limit: step + MemoryMargin, Message: msg}
 }
 
 // Account tracks the charges of one request so they are all released when its handler returns.
