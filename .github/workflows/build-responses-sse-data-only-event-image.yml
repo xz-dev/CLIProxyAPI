@@ -15,10 +15,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # deployed 45a74cc343 (no memory admission) + Responses SSE data-only event fix (router-for-me/CLIProxyAPI#7580)
-  SOURCE_SHA: 24af18c62e039bff4d20a0362e657b89aab2c6ae
+  # deployed 45a74cc343 (no memory admission) + Responses SSE data-only event fix, refined after review (router-for-me/CLIProxyAPI#7580)
+  SOURCE_SHA: f38c87df0b537ff2c6bea03a8ba50876b0de5f78
   IMAGE: ghcr.io/xz-dev/cli-proxy-api
-  IMAGE_TAG: ci-24af18c6-responses-sse-data-only-event
+  IMAGE_TAG: ci-f38c87df-responses-sse-data-only-event
 
 jobs:
   build:
