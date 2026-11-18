@@ -1,8 +1,9 @@
 package bodyspool
 
 import (
-	"encoding/json"
 	"fmt"
+
+	"github.com/MoeForge/moego/json"
 )
 
 // Error is an explicit hop error (D9). Error() is the JSON body in OpenAI shape, so the existing

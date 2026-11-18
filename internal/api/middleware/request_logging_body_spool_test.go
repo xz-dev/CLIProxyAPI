@@ -20,8 +20,8 @@ import (
 )
 
 // TestRequestLogTakesSkeletonOnly: with the body spool, the request log and the error-only
-// capture record the redacted skeleton, and so do the upstream HTTP and WebSocket request logs;
-// no blob byte and no nonce reaches a log file.
+// capture record the redacted skeleton, and so do the upstream HTTP and WebSocket request logs
+// and a rejected WebSocket upgrade; no blob byte and no nonce reaches a log file.
 func TestRequestLogTakesSkeletonOnly(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	blob := strings.Repeat("QUJD", 64<<10)
@@ -56,6 +56,7 @@ func TestRequestLogTakesSkeletonOnly(t *testing.T) {
 			cfg.RequestLog = full
 			helps.RecordAPIRequest(ctx, cfg, helps.UpstreamRequestLog{URL: "https://up.example/v1/responses", Method: http.MethodPost, Body: raw})
 			helps.RecordAPIWebsocketRequest(ctx, cfg, helps.UpstreamRequestLog{URL: "wss://up.example/v1/responses", Method: "WEBSOCKET", Body: raw})
+			helps.RecordAPIWebsocketUpgradeRejection(ctx, cfg, helps.UpstreamRequestLog{URL: "https://up.example/v1/responses", Method: http.MethodGet, Body: raw}, http.StatusForbidden, nil, []byte("fixture upgrade denied"))
 			c.JSON(http.StatusBadGateway, gin.H{"error": "upstream failed"})
 		})
 		req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))

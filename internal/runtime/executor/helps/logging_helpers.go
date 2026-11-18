@@ -457,6 +457,9 @@ func RecordAPIWebsocketUpgradeRejection(ctx context.Context, cfg *config.Config,
 	if cfg == nil || cfg.CommercialMode {
 		return
 	}
+	// Body spool: the deferred branch below does not pass through RecordAPIRequest, so redact
+	// the skeleton here; neither log mode may carry a live spool marker.
+	info.Body = bodyspool.SpoolFrom(ctx).Redact(info.Body)
 	// Check the immutable policy and request-scoped capture before accessing the pooled Gin context.
 	if !cfg.RequestLog {
 		if logging.DeferredAPIRequestCaptureDisabled(ctx) {

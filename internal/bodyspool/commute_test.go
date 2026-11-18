@@ -3,13 +3,13 @@ package bodyspool_test
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/base64"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/bodyspool"
 	_ "github.com/router-for-me/CLIProxyAPI/v8/internal/translator"
 	cliproxysession "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/session"
