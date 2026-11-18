@@ -16,10 +16,10 @@ concurrency:
 
 env:
   # upstream v8.0.77 + PR #7134 backport + body spool (memory admission gate removed)
-  # + Responses SSE data-only event fix (router-for-me/CLIProxyAPI#7580)
-  SOURCE_SHA: 6f822eaa4619d1359811feeabd074e153b7aa954
+  # + Responses SSE data-only event fix (router-for-me/CLIProxyAPI#7580) + review fixes (WS rejection redaction, moego codecs)
+  SOURCE_SHA: 3d1f7004857fdc391e28f172b532b0e4cb9c6a0b
   IMAGE: ghcr.io/xz-dev/cli-proxy-api
-  IMAGE_TAG: ci-6f822eaa-v8.0.77-capacity-sse
+  IMAGE_TAG: ci-3d1f7004-v8.0.77-capacity-sse
 
 jobs:
   build:
