@@ -805,7 +805,7 @@ func responsesSSEStartsNewDataFrame(pending, chunk []byte) bool {
 		return false
 	}
 	payload, _ := responsesSSEDataPayload(trimmedPending)
-	pendingType := gjson.GetBytes(payload, "type").String()
+	pendingType := ojson.GetBytes(payload, "type").String()
 	eventName := responsesSSEEventName(trimmedChunk)
 	return pendingType != "" && eventName != "" && eventName != pendingType
 }

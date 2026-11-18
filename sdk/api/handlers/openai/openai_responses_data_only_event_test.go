@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 // Upstream Responses streams may interleave a data-only event (no event: line), such as a
@@ -41,7 +41,7 @@ func TestResponsesSSEFramerDataOnlyEventKeepsTerminal(t *testing.T) {
 			if !ok {
 				continue
 			}
-			payloadType := gjson.GetBytes(payload, "type").String()
+			payloadType := ojson.GetBytes(payload, "type").String()
 			if name := responsesSSEEventName([]byte(frame)); name != "" && name != payloadType {
 				t.Fatalf("codexClient=%v: event %q carries %q payload:\n%s", codexClient, name, payloadType, frame)
 			}
@@ -75,7 +75,7 @@ func TestResponsesSSEFramerKeepsTypedDataBeforeMatchingEvent(t *testing.T) {
 	}
 	for i, want := range []string{"response.output_text.delta", "response.completed"} {
 		payload, _ := responsesSSEDataPayload([]byte(frames[i]))
-		if name, typ := responsesSSEEventName([]byte(frames[i])), gjson.GetBytes(payload, "type").String(); name != want || typ != want {
+		if name, typ := responsesSSEEventName([]byte(frames[i])), ojson.GetBytes(payload, "type").String(); name != want || typ != want {
 			t.Fatalf("frame %d: event=%q type=%q, want %q:\n%s", i, name, typ, want, frames[i])
 		}
 	}
